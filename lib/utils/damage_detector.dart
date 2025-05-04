@@ -139,66 +139,76 @@ class DamageDetector {
     // Calculate deviation from baseline
     double accelDevX = (latestAccel.x - _accelBaselineX).abs();
     double accelDevY = (latestAccel.y - _accelBaselineY).abs();
-    double accelDevZ = (latestAccel.z - _accelBaselineZ).abs() * _zAxisImpactWeight; // Z-axis weighted more
+    double accelDevZ = (latestAccel.z - _accelBaselineZ).abs() * _zAxisImpactWeight; // Z gets more weight
 
     double gyroDevX = (latestGyro.x - _gyroBaselineX).abs();
     double gyroDevY = (latestGyro.y - _gyroBaselineY).abs();
     double gyroDevZ = (latestGyro.z - _gyroBaselineZ).abs();
 
-    // Calculate composite severity
-    // We combine accelerometer and gyroscope data for better accuracy
-    double accelMagnitude = sqrt(accelDevX * accelDevX + accelDevY * accelDevY + accelDevZ * accelDevZ);
-    double gyroMagnitude = sqrt(gyroDevX * gyroDevX + gyroDevY * gyroDevY + gyroDevZ * gyroDevZ);
+    // Combined severity calculation (weighted sum of deviations)
+    double accelSeverity = (accelDevX + accelDevY + accelDevZ) / 3;
+    double gyroSeverity = (gyroDevX + gyroDevY + gyroDevZ) / 3;
 
-    // Detect peaks in the signal
-    double compositeMagnitude = (accelMagnitude * 0.6 + gyroMagnitude * 0.4);
+    // Final severity is weighted average of both sensors
+    // Gyro gets more weight as it's better for detecting angular changes (bumps)
+    double severityValue = (accelSeverity * 0.3 + gyroSeverity * 0.7);
 
-    // Update peak if current magnitude is higher
-    if (compositeMagnitude > _lastPeakMagnitude) {
-      _lastPeakMagnitude = compositeMagnitude;
-    } else {
-      // Decay the peak over time to reset after a while
-      _lastPeakMagnitude *= 0.95;
+    // Update peak if this is higher
+    if (severityValue > _lastPeakMagnitude) {
+      _lastPeakMagnitude = severityValue;
     }
 
-    // Calculate confidence based on signal-to-noise ratio
-    double noiseLevel = _calculateNoiseLevel();
-    double signalToNoise = noiseLevel > 0 ? compositeMagnitude / noiseLevel : 0;
-    double confidence = min(signalToNoise / 5.0, 1.0); // Cap at 1.0
+    // Calculate confidence based on consistency of readings
+    double confidence = _calculateConfidence();
 
-    // Determine if this is a damage event
-    bool isDamaged = compositeMagnitude > threshold && confidence > _minConfidenceThreshold;
+    // Finally determine if this is damage
+    bool isDamaged = severityValue > threshold && confidence > _minConfidenceThreshold;
 
     return DamageResult(
       isDamaged: isDamaged,
-      severity: compositeMagnitude,
+      severity: severityValue,
       confidence: confidence,
     );
   }
 
-  // Calculate noise level from recent readings
-  double _calculateNoiseLevel() {
-    if (_accelHistory.length < 5) return 1.0; // Default if not enough data
+  // Calculate confidence based on consistency of readings
+  double _calculateConfidence() {
+    if (_accelHistory.length < _windowSize) return 0.0;
 
-    // Use the standard deviation of recent readings as noise estimate
+    // Calculate standard deviation of recent readings
     List<double> magnitudes = [];
-    for (int i = max(0, _accelHistory.length - 5); i < _accelHistory.length; i++) {
-      AccelerometerEvent event = _accelHistory[i];
-      double devX = (event.x - _accelBaselineX).abs();
-      double devY = (event.y - _accelBaselineY).abs();
-      double devZ = (event.z - _accelBaselineZ).abs();
-      magnitudes.add(sqrt(devX * devX + devY * devY + devZ * devZ));
+    for (var reading in _accelHistory) {
+      double mx = reading.x - _accelBaselineX;
+      double my = reading.y - _accelBaselineY;
+      double mz = reading.z - _accelBaselineZ;
+      magnitudes.add(sqrt(mx * mx + my * my + mz * mz));
     }
 
-    // Calculate standard deviation
     double mean = magnitudes.reduce((a, b) => a + b) / magnitudes.length;
-    double variance = magnitudes.fold(0.0, (sum, val) => sum + pow(val - mean, 2)) / magnitudes.length;
-    return sqrt(variance) + 0.1; // Add small constant to avoid division by zero
+    double sumSquaredDiff = magnitudes.fold(0, (sum, val) => sum + pow(val - mean, 2));
+    double stdDev = sqrt(sumSquaredDiff / magnitudes.length);
+
+    // Normalize standard deviation to get confidence
+    // Lower stdDev means higher confidence (more consistent readings)
+    double confidence = 1.0 - min(1.0, stdDev / 5.0);
+
+    return confidence;
   }
 
-  // Force recalibration (e.g., on user request)
-  void recalibrate() {
+  // Manually force calibration (useful after device position changes)
+  void forceCalibrate() {
     _isCalibrated = false;
+    _calibrateBaselines();
+  }
+
+  // Check if the detector is calibrated
+  bool get isCalibrated => _isCalibrated;
+
+  // Get the last detected peak magnitude
+  double get lastPeakMagnitude => _lastPeakMagnitude;
+
+  // Reset the peak magnitude
+  void resetPeak() {
     _lastPeakMagnitude = 0.0;
   }
 }

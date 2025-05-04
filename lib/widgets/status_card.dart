@@ -28,45 +28,34 @@ class StatusCard extends StatelessWidget {
       elevation: 4,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
       child: Container(
+        width: 220,
         padding: const EdgeInsets.all(12),
-        width: MediaQuery.of(context).size.width * 0.85,
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           mainAxisSize: MainAxisSize.min,
           children: [
-            // Status header with recording indicator
+            // Status indicator
             Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                Text(
-                  'Status',
-                  style: Theme.of(context).textTheme.titleLarge,
+                Container(
+                  width: 12,
+                  height: 12,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    color: recordingActive ? Colors.green : Colors.grey,
+                  ),
                 ),
-                Row(
-                  children: [
-                    if (recordingActive)
-                      Container(
-                        width: 12,
-                        height: 12,
-                        decoration: BoxDecoration(
-                          color: Colors.red,
-                          borderRadius: BorderRadius.circular(6),
-                        ),
-                      ),
-                    SizedBox(width: 4),
-                    Text(
-                      recordingActive ? 'RECORDING' : 'IDLE',
-                      style: TextStyle(
-                        color: recordingActive ? Colors.red : Colors.grey,
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
-                  ],
+                const SizedBox(width: 8),
+                Text(
+                  recordingActive ? 'Recording Active' : 'Recording Paused',
+                  style: TextStyle(
+                    fontWeight: FontWeight.bold,
+                    color: recordingActive ? Colors.green : Colors.grey,
+                  ),
                 ),
               ],
             ),
-
-            Divider(),
+            const Divider(),
 
             // Current severity indicator
             Row(
@@ -77,105 +66,158 @@ class StatusCard extends StatelessWidget {
                     children: [
                       Text(
                         'Current Severity',
-                        style: TextStyle(fontSize: 14, color: Colors.grey),
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: Colors.grey[600],
+                        ),
                       ),
-                      SizedBox(height: 4),
-                      LinearProgressIndicator(
-                        value: currentSeverity / 10, // Scale to 0-1 range assuming max severity is 10
-                        backgroundColor: Colors.grey.shade200,
-                        valueColor: AlwaysStoppedAnimation<Color>(
-                          isDamaged ? Colors.red : Colors.green,
+                      Text(
+                        currentSeverity.toStringAsFixed(1),
+                        style: TextStyle(
+                          fontSize: 18,
+                          fontWeight: FontWeight.bold,
+                          color: isDamaged ? Colors.red : Colors.blue,
                         ),
                       ),
                     ],
                   ),
                 ),
-                SizedBox(width: 12),
+                // Severity gauge
                 Container(
-                  padding: EdgeInsets.all(8),
-                  decoration: BoxDecoration(
-                    color: isDamaged ? Colors.red.shade100 : Colors.green.shade100,
-                    borderRadius: BorderRadius.circular(8),
-                  ),
-                  child: Text(
-                    currentSeverity.toStringAsFixed(1),
-                    style: TextStyle(
-                      fontWeight: FontWeight.bold,
-                      color: isDamaged ? Colors.red : Colors.green,
+                  width: 60,
+                  height: 60,
+                  child: CustomPaint(
+                    painter: SeverityGaugePainter(
+                      threshold: threshold,
+                      currentValue: currentSeverity,
+                      isDamaged: isDamaged,
                     ),
                   ),
                 ),
               ],
             ),
+            const SizedBox(height: 8),
 
-            SizedBox(height: 12),
-
-            // Status indicators
+            // Stats
             Row(
-              mainAxisAlignment: MainAxisAlignment.spaceAround,
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                _buildStatusItem(
-                  context,
-                  Icons.warning,
-                  damageCount.toString(),
-                  'Potholes',
-                  Colors.orange,
-                ),
-                _buildStatusItem(
-                  context,
-                  Icons.straighten,
-                  '${(distanceTraveled / 1000).toStringAsFixed(1)} km',
+                _buildStatItem('Damages', '$damageCount', Icons.warning),
+                _buildStatItem(
                   'Distance',
-                  Colors.blue,
-                ),
-                _buildStatusItem(
-                  context,
-                  Icons.access_time,
-                  lastRecordTime != null
-                      ? DateFormat('HH:mm:ss').format(lastRecordTime!)
-                      : '--:--',
-                  'Last Detection',
-                  Colors.purple,
+                  '${(distanceTraveled / 1000).toStringAsFixed(1)} km',
+                  Icons.straighten,
                 ),
               ],
             ),
+            const SizedBox(height: 8),
 
-            SizedBox(height: 8),
-
-            // Threshold information
-            Padding(
-              padding: const EdgeInsets.only(top: 4),
-              child: Text(
-                'Detection Threshold: ${threshold.toStringAsFixed(1)}',
-                style: TextStyle(fontSize: 12, color: Colors.grey),
+            // Last record time
+            if (lastRecordTime != null)
+              Row(
+                children: [
+                  Icon(Icons.access_time, size: 14, color: Colors.grey[600]),
+                  const SizedBox(width: 4),
+                  Text(
+                    'Last: ${DateFormat('HH:mm:ss').format(lastRecordTime!)}',
+                    style: TextStyle(fontSize: 12, color: Colors.grey[600]),
+                  ),
+                ],
               ),
-            ),
           ],
         ),
       ),
     );
   }
 
-  Widget _buildStatusItem(BuildContext context, IconData icon, String value, String label, Color color) {
+  Widget _buildStatItem(String label, String value, IconData icon) {
     return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Icon(icon, color: color, size: 20),
-        SizedBox(height: 4),
+        Row(
+          children: [
+            Icon(icon, size: 14, color: Colors.grey[600]),
+            const SizedBox(width: 4),
+            Text(
+              label,
+              style: TextStyle(fontSize: 12, color: Colors.grey[600]),
+            ),
+          ],
+        ),
         Text(
           value,
           style: TextStyle(
-            fontWeight: FontWeight.bold,
-            fontSize: 16,
-          ),
-        ),
-        Text(
-          label,
-          style: TextStyle(
-            fontSize: 12,
-            color: Colors.grey,
+            fontWeight: FontWeight.w500,
           ),
         ),
       ],
     );
+  }
+}
+
+class SeverityGaugePainter extends CustomPainter {
+  final double threshold;
+  final double currentValue;
+  final bool isDamaged;
+
+  SeverityGaugePainter({
+    required this.threshold,
+    required this.currentValue,
+    required this.isDamaged,
+  });
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final center = Offset(size.width / 2, size.height / 2);
+    final radius = size.width / 2;
+
+    // Draw background circle
+    final bgPaint = Paint()
+      ..color = Colors.grey.withOpacity(0.2)
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 5;
+
+    canvas.drawCircle(center, radius - 5, bgPaint);
+
+    // Draw threshold marker
+    final thresholdAngle = (threshold / 10) * 2 * 3.14159;
+    final thresholdPaint = Paint()
+      ..color = Colors.orange
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 2;
+
+    canvas.drawArc(
+      Rect.fromCircle(center: center, radius: radius - 5),
+      -3.14159 / 2, // Start from top (negative PI/2)
+      thresholdAngle,
+      false,
+      thresholdPaint,
+    );
+
+    // Calculate angle based on currentValue (max 10)
+    final normalizedValue = currentValue > 10 ? 10 : currentValue;
+    final sweepAngle = (normalizedValue / 10) * 2 * 3.14159;
+
+    // Draw value arc
+    final valuePaint = Paint()
+      ..color = isDamaged ? Colors.red : Colors.blue
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 5
+      ..strokeCap = StrokeCap.round;
+
+    canvas.drawArc(
+      Rect.fromCircle(center: center, radius: radius - 5),
+      -3.14159 / 2, // Start from top
+      sweepAngle,
+      false,
+      valuePaint,
+    );
+  }
+
+  @override
+  bool shouldRepaint(covariant SeverityGaugePainter oldDelegate) {
+    return oldDelegate.currentValue != currentValue ||
+        oldDelegate.threshold != threshold ||
+        oldDelegate.isDamaged != isDamaged;
   }
 }
