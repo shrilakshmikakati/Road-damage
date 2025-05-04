@@ -121,8 +121,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
   }
 
   Future<void> _launchURL(String url) async {
-    if (await canLaunch(url)) {
-      await launch(url);
+    final Uri uri = Uri.parse(url);
+    if (await canLaunchUrl(uri)) {
+      await launchUrl(uri);
     } else {
       _showInfoDialog('Error', 'Could not open $url');
     }
@@ -133,102 +134,262 @@ class _SettingsScreenState extends State<SettingsScreen> {
     final settings = Provider.of<SettingsProvider>(context);
 
     return Scaffold(
-        appBar: AppBar(title: Text('Settings')),
-        body: Stack(
-            children: [
-        ListView(
-        padding: EdgeInsets.all(16),
+      appBar: AppBar(title: Text('Settings')),
+      body: Stack(
         children: [
-    // Detection Settings
-    Card(
-    margin: EdgeInsets.only(bottom: 16),
-    child: Padding(
-    padding: EdgeInsets.all(16),
-    child: Column(
-    crossAxisAlignment: CrossAxisAlignment.start,
-    children: [
-    Row(
-    children: [
-    Icon(Icons.analytics_outlined, color: Theme.of(context).primaryColor),
-    SizedBox(width: 8),
-    Text('Detection Settings', style: Theme.of(context).textTheme.titleLarge),
-    ],
-    ),
-    Divider(),
-    SizedBox(height: 8),
-    Text('Damage Threshold: ${settings.threshold.toStringAsFixed(1)}'),
-    Slider(
-    min: 1.0,
-    max: 10.0,
-    divisions: 18,
-    value: settings.threshold,
-    onChanged: settings.updateThreshold,
-    ),
-    Text(
-    'Higher values make the app less sensitive to bumps.',
-    style: TextStyle(fontSize: 12, color: Colors.grey),
-    ),
-    ],
-    ),
-    ),
-    ),
+          ListView(
+            padding: EdgeInsets.all(16),
+            children: [
+              // Detection Settings
+              Card(
+                margin: EdgeInsets.only(bottom: 16),
+                child: Padding(
+                  padding: EdgeInsets.all(16),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          Icon(Icons.analytics_outlined, color: Theme.of(context).primaryColor),
+                          SizedBox(width: 8),
+                          Text('Detection Settings', style: Theme.of(context).textTheme.titleLarge),
+                        ],
+                      ),
+                      Divider(),
+                      SizedBox(height: 8),
+                      Text('Damage Threshold: ${settings.threshold.toStringAsFixed(1)}'),
+                      Slider(
+                        min: 1.0,
+                        max: 10.0,
+                        divisions: 18,
+                        value: settings.threshold,
+                        onChanged: settings.updateThreshold,
+                      ),
+                      Text(
+                        'Higher values make the app less sensitive to bumps.',
+                        style: TextStyle(fontSize: 12, color: Colors.grey),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
 
-    // Map Settings
-    Card(
-    margin: EdgeInsets.only(bottom: 16),
-    child: Padding(
-    padding: EdgeInsets.all(16),
-    child: Column(
-    crossAxisAlignment: CrossAxisAlignment.start,
-    children: [
-    Row(
-    children: [
-    Icon(Icons.map_outlined, color: Theme.of(context).primaryColor),
-    SizedBox(width: 8),
-    Text('Map Settings', style: Theme.of(context).textTheme.titleLarge),
-    ],
-    ),
-    Divider(),
-    SizedBox(height: 8),
-    ListTile(
-    contentPadding: EdgeInsets.zero,
-    title: Text('Map Type'),
-    trailing: DropdownButton<String>(
-    value: settings.mapStyle,
-    onChanged: (value) {
-    if (value != null) settings.setMapStyle(value);
-    },
-    items: [
-    DropdownMenuItem(
-    value: 'standard',
-    child: Text('Standard'),
-    ),
-    DropdownMenuItem(
-    value: 'satellite',
-    child: Text('Satellite'),
-    ),
-    DropdownMenuItem(
-    value: 'terrain',
-    child: Text('Terrain'),
-    ),
-    ],
-    ),
-    ),
-    ],
-    ),
-    ),
-    ),
+              // Map Settings
+              Card(
+                margin: EdgeInsets.only(bottom: 16),
+                child: Padding(
+                  padding: EdgeInsets.all(16),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          Icon(Icons.map_outlined, color: Theme.of(context).primaryColor),
+                          SizedBox(width: 8),
+                          Text('Map Settings', style: Theme.of(context).textTheme.titleLarge),
+                        ],
+                      ),
+                      Divider(),
+                      SizedBox(height: 8),
+                      ListTile(
+                        contentPadding: EdgeInsets.zero,
+                        title: Text('Map Type'),
+                        trailing: DropdownButton<String>(
+                          value: settings.mapStyle,
+                          onChanged: (value) {
+                            if (value != null) settings.setMapStyle(value);
+                          },
+                          items: [
+                            DropdownMenuItem(
+                              value: 'standard',
+                              child: Text('Standard'),
+                            ),
+                            DropdownMenuItem(
+                              value: 'satellite',
+                              child: Text('Satellite'),
+                            ),
+                            DropdownMenuItem(
+                              value: 'terrain',
+                              child: Text('Terrain'),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
 
-    // Appearance Settings
-    Card(
-    margin: EdgeInsets.only(bottom: 16),
-    child: Padding(
-    padding: EdgeInsets.all(16),
-    child: Column(
-    crossAxisAlignment: CrossAxisAlignment.start,
-    children: [
-    Row(
-    children: [
-    Icon(Icons.palette_outlined, color: Theme.of(context).primaryColor),
-    SizedBox(width: 8),
-    Text('Appearance', style: Theme
+              // Appearance Settings
+              Card(
+                margin: EdgeInsets.only(bottom: 16),
+                child: Padding(
+                  padding: EdgeInsets.all(16),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          Icon(Icons.palette_outlined, color: Theme.of(context).primaryColor),
+                          SizedBox(width: 8),
+                          Text('Appearance', style: Theme.of(context).textTheme.titleLarge),
+                        ],
+                      ),
+                      Divider(),
+                      SizedBox(height: 8),
+                      SwitchListTile(
+                        contentPadding: EdgeInsets.zero,
+                        title: Text('Dark Mode'),
+                        subtitle: Text('Use dark theme throughout the app'),
+                        value: settings.darkMode,
+                        onChanged: (value) {
+                          settings.setDarkMode(value);
+                        },
+                      ),
+                      SwitchListTile(
+                        contentPadding: EdgeInsets.zero,
+                        title: Text('Night Mode Map'),
+                        subtitle: Text('Use dark styled map at night'),
+                        value: settings.nightModeMap,
+                        onChanged: (value) {
+                          settings.setNightModeMap(value);
+                        },
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+
+              // Storage Settings
+              Card(
+                margin: EdgeInsets.only(bottom: 16),
+                child: Padding(
+                  padding: EdgeInsets.all(16),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          Icon(Icons.storage_outlined, color: Theme.of(context).primaryColor),
+                          SizedBox(width: 8),
+                          Text('Storage & Sync', style: Theme.of(context).textTheme.titleLarge),
+                        ],
+                      ),
+                      Divider(),
+                      SizedBox(height: 8),
+                      SwitchListTile(
+                        contentPadding: EdgeInsets.zero,
+                        title: Text('Cloud Sync'),
+                        subtitle: Text('Sync road condition data with the cloud'),
+                        value: settings.cloudSync,
+                        onChanged: settings.setCloudSync,
+                      ),
+                      SwitchListTile(
+                        contentPadding: EdgeInsets.zero,
+                        title: Text('Auto Sync'),
+                        subtitle: Text('Automatically sync when connected to WiFi'),
+                        value: settings.autoSync,
+                        onChanged: settings.cloudSync ? settings.setAutoSync : null,
+                      ),
+                      Divider(),
+                      SizedBox(height: 8),
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                        children: [
+                          Expanded(
+                            child: ElevatedButton.icon(
+                              onPressed: settings.cloudSync && !_isSyncing
+                                  ? _syncWithCloud
+                                  : null,
+                              icon: Icon(Icons.upload),
+                              label: Text('Upload Data'),
+                            ),
+                          ),
+                          SizedBox(width: 16),
+                          Expanded(
+                            child: ElevatedButton.icon(
+                              onPressed: settings.cloudSync && !_isSyncing
+                                  ? _downloadFromCloud
+                                  : null,
+                              icon: Icon(Icons.download),
+                              label: Text('Download Data'),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+
+              // About Section
+              Card(
+                margin: EdgeInsets.only(bottom: 16),
+                child: Padding(
+                  padding: EdgeInsets.all(16),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          Icon(Icons.info_outline, color: Theme.of(context).primaryColor),
+                          SizedBox(width: 8),
+                          Text('About', style: Theme.of(context).textTheme.titleLarge),
+                        ],
+                      ),
+                      Divider(),
+                      SizedBox(height: 8),
+                      ListTile(
+                        contentPadding: EdgeInsets.zero,
+                        title: Text('Version'),
+                        subtitle: Text(_appVersion),
+                        trailing: Icon(Icons.arrow_forward_ios, size: 16),
+                        onTap: () => _showInfoDialog(
+                            'App Version',
+                            'Road Damage Detector\nVersion: $_appVersion\n\nThis app helps detect and map road damage using your device sensors.'
+                        ),
+                      ),
+                      ListTile(
+                        contentPadding: EdgeInsets.zero,
+                        title: Text('Privacy Policy'),
+                        trailing: Icon(Icons.arrow_forward_ios, size: 16),
+                        onTap: () => _launchURL('https://example.com/privacy'),
+                      ),
+                      ListTile(
+                        contentPadding: EdgeInsets.zero,
+                        title: Text('Send Feedback'),
+                        trailing: Icon(Icons.arrow_forward_ios, size: 16),
+                        onTap: () => _launchURL('mailto:feedback@example.com'),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ],
+          ),
+
+          // Loading overlay
+          if (_isSyncing)
+            Container(
+              color: Colors.black26,
+              child: Center(
+                child: Card(
+                  child: Padding(
+                    padding: EdgeInsets.all(16),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        CircularProgressIndicator(),
+                        SizedBox(height: 16),
+                        Text('Syncing data...'),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+}
