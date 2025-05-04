@@ -1,537 +1,402 @@
 // lib/screens/home_map_screen.dart
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:location/location.dart';
-import 'package:provider/provider.dart';
-import 'package:sensors_plus/sensors_plus.dart';
-import 'dart:async';
-import 'dart:math';
-import 'package:flutter/services.dart';
-import '../provider/settings_provider.dart';
-import '../models/damage_record.dart';
-import '../repositories/damage_repository.dart';
-import '../widgets/status_card.dart';
 import '../utils/damage_detector.dart';
-import 'calibration_screen.dart';
-import 'history_screen.dart';
-import 'settings_screen.dart';
+import 'package:flutter/services.dart';
+import 'dart:ui' as ui;
+import 'dart:typed_data';
 
 class HomeMapScreen extends StatefulWidget {
   const HomeMapScreen({Key? key}) : super(key: key);
+
+  // Add static route name
   static const routeName = '/home';
+
   @override
   _HomeMapScreenState createState() => _HomeMapScreenState();
 }
 
-class _HomeMapScreenState extends State<HomeMapScreen> with WidgetsBindingObserver {
-  GoogleMapController? _mapController;
-  final Location _location = Location();
-  final DamageRepository _repository = DamageRepository();
+class _HomeMapScreenState extends State<HomeMapScreen> {
+  // Google Maps controller
+  Completer<GoogleMapController> _controller = Completer();
+
+  // Current camera position
+  CameraPosition _initialCameraPosition = CameraPosition(
+    target: LatLng(37.42796133580664, -122.085749655962),
+    zoom: 14.0,
+  );
+
+  // Markers and polylines
+  Set<Marker> _markers = {};
+  Set<Polyline> _polylines = {};
+  Map<String, List<LatLng>> _roadSegments = {
+    'damaged': [],
+    'smooth': [],
+  };
+
+  // Damage detector reference
   final DamageDetector _damageDetector = DamageDetector();
 
-  StreamSubscription<AccelerometerEvent>? _accelSub;
-  StreamSubscription<GyroscopeEvent>? _gyroSub;
-  StreamSubscription<LocationData>? _locationSub;
+  // Location service
+  final Location _locationService = Location();
+  LocationData? _currentLocation;
 
-  bool _isDamaged = false;
-  double _currentSeverity = 0.0;
-  Set<Marker> _markers = {};
-  LatLng _currentPosition = LatLng(37.7749, -122.4194); // Default position
+  // Tracking state
+  bool _isTracking = false;
+  bool _firstLocationUpdate = true;
 
-  // For polyline rendering
-  Map<String, List<LatLng>> _routeSegments = {};
-  Set<Polyline> _polylines = {};
-  String _currentSegmentId = DateTime.now().millisecondsSinceEpoch.toString();
-
-  // For UI updates
-  bool _isMapReady = false;
-  bool _isFollowingUser = true;
-  int _detectedDamageCount = 0;
-  double _distanceTraveled = 0;
-  DateTime? _lastRecordTime;
-  LatLng? _lastPosition;
-
-  // For damage detection
-  final List<double> _recentAccelReadings = [];
-  final int _maxReadingsHistory = 100;
-  double _baselineNoise = 0.5;
-  Timer? _cooldownTimer;
-  bool _inCooldown = false;
-
-  // Map style
-  String _mapStyle = '';
+  // Custom markers
+  BitmapDescriptor? _damageMarkerIcon;
+  BitmapDescriptor? _smoothMarkerIcon;
 
   @override
   void initState() {
     super.initState();
-    WidgetsBinding.instance.addObserver(this);
-    _loadMapStyles();
-    _loadSavedMarkers();
-    _initLocation();
-
-    // Start services after a short delay to ensure everything is initialized
-    Future.delayed(Duration(milliseconds: 500), () {
-      _startServices();
-    });
+    _initializeApp();
   }
 
-  Future<void> _loadMapStyles() async {
-    // Load the map style for night mode
-    _mapStyle = await rootBundle.loadString('assets/map_styles/night_mode.json');
+  Future<void> _initializeApp() async {
+    // Create custom marker icons
+    await _createMarkerIcons();
+
+    // Initialize damage detector
+    await _damageDetector.initialize();
+
+    // Add listener for road damage events
+    _damageDetector.addListener(_onRoadDamageEvent);
+
+    // Get initial location
+    await _getCurrentLocation();
+
+    // Load saved road data
+    _loadSavedRoadData();
   }
 
-  Future<void> _loadSavedMarkers() async {
-    final records = await _repository.getRecords();
-
-    if (mounted) {
-      setState(() {
-        _markers = records.map((record) =>
-            Marker(
-              markerId: MarkerId(record.id),
-              position: record.position,
-              icon: BitmapDescriptor.defaultMarkerWithHue(
-                record.isDamaged ? BitmapDescriptor.hueRed : BitmapDescriptor.hueBlue,
-              ),
-              infoWindow: InfoWindow(
-                title: record.isDamaged ? 'Damaged Road' : 'Good Road',
-                snippet: 'Date: ${_formatDateTime(record.timestamp)} - Severity: ${record.severity.toStringAsFixed(1)}',
-              ),
-            )
-        ).toSet();
-      });
-    }
-  }
-
-  String _formatDateTime(DateTime dt) {
-    return '${dt.month}/${dt.day} ${dt.hour}:${dt.minute.toString().padLeft(2, '0')}';
-  }
-
-  void _initLocation() {
-    _location.changeSettings(
-      accuracy: LocationAccuracy.high,
-      interval: 1000,
-      distanceFilter: 5, // Update only when moved 5 meters
+  Future<void> _createMarkerIcons() async {
+    // Create custom marker for damage
+    final Uint8List damageMarkerIcon = await _getBytesFromCanvas(
+        'D',
+        Colors.red,
+        Colors.white
     );
+    _damageMarkerIcon = BitmapDescriptor.fromBytes(damageMarkerIcon);
+
+    // Create custom marker for smooth roads
+    final Uint8List smoothMarkerIcon = await _getBytesFromCanvas(
+        'S',
+        Colors.blue,
+        Colors.white
+    );
+    _smoothMarkerIcon = BitmapDescriptor.fromBytes(smoothMarkerIcon);
   }
 
-  void _startServices() {
-    final settings = Provider.of<SettingsProvider>(context, listen: false);
-    if (settings.recordingActive) {
-      _startRecording();
-    }
-  }
+  Future<Uint8List> _getBytesFromCanvas(String text, Color backgroundColor, Color textColor) async {
+    final ui.PictureRecorder pictureRecorder = ui.PictureRecorder();
+    final Canvas canvas = Canvas(pictureRecorder);
+    final Paint paint = Paint()..color = backgroundColor;
+    final TextPainter textPainter = TextPainter(
+      text: TextSpan(
+        text: text,
+        style: TextStyle(
+          fontSize: 30.0,
+          fontWeight: FontWeight.bold,
+          color: textColor,
+        ),
+      ),
+      textDirection: TextDirection.ltr,
+    );
 
-  void _startRecording() {
-    // Reset counters
-    _detectedDamageCount = 0;
-    _distanceTraveled = 0;
-    _lastPosition = null;
-    _currentSegmentId = DateTime.now().millisecondsSinceEpoch.toString();
-    _routeSegments[_currentSegmentId] = [];
+    textPainter.layout();
 
-    // Show toast
-    ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Recording started'),
-          duration: Duration(seconds: 2),
+    // Draw circle background
+    canvas.drawCircle(
+        Offset(24, 24),
+        24,
+        paint
+    );
+
+    // Draw text
+    textPainter.paint(
+        canvas,
+        Offset(
+            24 - textPainter.width / 2,
+            24 - textPainter.height / 2
         )
     );
 
-    // Start location tracking
-    _locationSub = _location.onLocationChanged.listen((loc) {
-      if (loc.latitude == null || loc.longitude == null) return;
+    final ui.Image image = await pictureRecorder.endRecording().toImage(48, 48);
+    final ByteData? byteData = await image.toByteData(format: ui.ImageByteFormat.png);
 
-      final newPos = LatLng(loc.latitude!, loc.longitude!);
-
-      // Calculate distance if we have a previous position
-      if (_lastPosition != null) {
-        final distance = _calculateDistance(_lastPosition!, newPos);
-        _distanceTraveled += distance;
-      }
-
-      _lastPosition = newPos;
-
-      if (mounted) {
-        setState(() {
-          _currentPosition = newPos;
-          if (_routeSegments.containsKey(_currentSegmentId)) {
-            _routeSegments[_currentSegmentId]!.add(newPos);
-          }
-        });
-      }
-
-      // Update camera position if following is enabled
-      if (_isMapReady && _mapController != null && _isFollowingUser) {
-        _mapController!.animateCamera(CameraUpdate.newLatLng(newPos));
-      }
-
-      // Update polylines
-      _updatePolylines();
-    });
-
-    // Start accelerometer listening
-    _accelSub = accelerometerEvents.listen((e) {
-      // Calculate the magnitude of acceleration
-      final magnitude = sqrt(e.x * e.x + e.y * e.y + e.z * e.z);
-
-      // Add to readings history
-      _recentAccelReadings.add(magnitude);
-      if (_recentAccelReadings.length > _maxReadingsHistory) {
-        _recentAccelReadings.removeAt(0);
-      }
-
-      // Calculate baseline (average) if we have enough readings
-      if (_recentAccelReadings.length >= 20) {
-        _baselineNoise = _calculateBaseline();
-      }
-    });
-
-    // Start gyroscope listening
-    final threshold = Provider.of<SettingsProvider>(context, listen: false).threshold;
-    _gyroSub = gyroscopeEvents.listen((e) {
-      // Calculate rotational magnitude and adjust for baseline noise
-      final mag = (e.x.abs() + e.y.abs() + e.z.abs()) - _baselineNoise;
-      final adjustedMag = max(0.0, mag); // Don't allow negative values
-
-      if (mounted) {
-        setState(() {
-          _currentSeverity = adjustedMag;
-          _isDamaged = adjustedMag > threshold && !_inCooldown;
-        });
-      }
-
-      // If we have a damage spike and not in cooldown, record it
-      if (_isDamaged && !_inCooldown) {
-        _recordDamage(_currentPosition, adjustedMag);
-
-        // Start cooldown timer to prevent repeated recordings at same location
-        _startCooldown();
-      }
-    });
+    return byteData!.buffer.asUint8List();
   }
 
-  double _calculateBaseline() {
-    // Get the average of the middle 60% of readings (removing extremes)
-    List<double> sortedReadings = List.from(_recentAccelReadings)..sort();
-    int startIdx = (_recentAccelReadings.length * 0.2).round();
-    int endIdx = (_recentAccelReadings.length * 0.8).round();
-
-    double sum = 0;
-    for (int i = startIdx; i < endIdx; i++) {
-      sum += sortedReadings[i];
-    }
-
-    return sum / (endIdx - startIdx);
-  }
-
-  void _startCooldown() {
-    _inCooldown = true;
-    _cooldownTimer?.cancel();
-    _cooldownTimer = Timer(const Duration(seconds: 3), () {
-      _inCooldown = false;
-    });
-  }
-
-  double _calculateDistance(LatLng start, LatLng end) {
-    // Using Haversine formula to calculate distance
-    const int earthRadius = 6371000; // in meters
-    double lat1 = start.latitude * pi / 180;
-    double lat2 = end.latitude * pi / 180;
-    double lon1 = start.longitude * pi / 180;
-    double lon2 = end.longitude * pi / 180;
-
-    double dLat = lat2 - lat1;
-    double dLon = lon2 - lon1;
-
-    double a = sin(dLat/2) * sin(dLat/2) +
-        cos(lat1) * cos(lat2) *
-            sin(dLon/2) * sin(dLon/2);
-    double c = 2 * atan2(sqrt(a), sqrt(1-a));
-
-    return earthRadius * c; // in meters
-  }
-
-  void _stopRecording() {
-    _locationSub?.cancel();
-    _accelSub?.cancel();
-    _gyroSub?.cancel();
-    _locationSub = null;
-    _accelSub = null;
-    _gyroSub = null;
-
-    // Show toast
-    ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Recording stopped'),
-          duration: Duration(seconds: 2),
-        )
-    );
-  }
-
-  void _updatePolylines() {
-    // Skip if not enough points
-    if (_routeSegments.isEmpty) return;
-
-    Set<Polyline> newPolylines = {};
-
-    _routeSegments.forEach((id, points) {
-      if (points.length >= 2) {
-        newPolylines.add(
-          Polyline(
-            polylineId: PolylineId(id),
-            points: points,
-            color: _isDamaged ? Colors.red : Colors.blue,
-            width: 4,
-          ),
+  Future<void> _getCurrentLocation() async {
+    try {
+      _currentLocation = await _locationService.getLocation();
+      if (_currentLocation != null) {
+        _updateCameraPosition(
+            LatLng(_currentLocation!.latitude!, _currentLocation!.longitude!)
         );
       }
-    });
+    } catch (e) {
+      print('Error getting location: $e');
+    }
 
-    if (mounted) {
+    // Listen for location changes
+    _locationService.onLocationChanged.listen((LocationData newLocation) {
       setState(() {
-        _polylines = newPolylines;
+        _currentLocation = newLocation;
+
+        if (_firstLocationUpdate) {
+          _updateCameraPosition(
+              LatLng(_currentLocation!.latitude!, _currentLocation!.longitude!)
+          );
+          _firstLocationUpdate = false;
+        }
+
+        // If tracking, update camera position to follow user
+        if (_isTracking) {
+          _updateCameraPosition(
+              LatLng(_currentLocation!.latitude!, _currentLocation!.longitude!)
+          );
+        }
       });
-    }
+    });
   }
 
-  void _recordDamage(LatLng pos, double severity) {
-    final id = DateTime.now().millisecondsSinceEpoch.toString();
-    final record = DamageRecord(
-      id: id,
-      position: pos,
-      timestamp: DateTime.now(),
-      severity: severity,
-      isDamaged: true,
-    );
-
-    // Save to repository
-    _repository.addRecord(record);
-
-    // Increment counter
-    setState(() {
-      _detectedDamageCount++;
-      _lastRecordTime = DateTime.now();
-    });
-
-    // Add to map
-    setState(() {
-      _markers.add(
-        Marker(
-          markerId: MarkerId(id),
-          position: pos,
-          icon: BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueRed),
-          infoWindow: InfoWindow(
-            title: 'Damaged Road',
-            snippet: 'Severity: ${severity.toStringAsFixed(1)}',
-          ),
+  void _updateCameraPosition(LatLng position) async {
+    final GoogleMapController controller = await _controller.future;
+    controller.animateCamera(
+      CameraUpdate.newCameraPosition(
+        CameraPosition(
+          target: position,
+          zoom: 16.0,
         ),
-      );
-    });
-
-    // Vibrate to give feedback
-    HapticFeedback.mediumImpact();
-
-    // Start a new polyline segment for color distinction
-    _currentSegmentId = DateTime.now().millisecondsSinceEpoch.toString();
-    _routeSegments[_currentSegmentId] = [pos];
-  }
-
-  void _toggleRecording() {
-    final settings = Provider.of<SettingsProvider>(context, listen: false);
-    settings.toggleRecording(!settings.recordingActive);
-
-    if (settings.recordingActive) {
-      _startRecording();
-    } else {
-      _stopRecording();
-    }
-  }
-
-  void _toggleFollowUser() {
-    setState(() {
-      _isFollowingUser = !_isFollowingUser;
-
-      if (_isFollowingUser && _mapController != null) {
-        _mapController!.animateCamera(CameraUpdate.newLatLng(_currentPosition));
-      }
-    });
-  }
-
-  void _clearMap() {
-    showDialog(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: Text('Clear Map'),
-        content: Text('This will clear all current route lines but keep saved damage records. Continue?'),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(ctx).pop(),
-            child: Text('CANCEL'),
-          ),
-          TextButton(
-            onPressed: () {
-              setState(() {
-                _polylines.clear();
-                _routeSegments.clear();
-                _currentSegmentId = DateTime.now().millisecondsSinceEpoch.toString();
-                _routeSegments[_currentSegmentId] = [];
-              });
-              Navigator.of(ctx).pop();
-            },
-            child: Text('CLEAR'),
-          ),
-        ],
       ),
     );
   }
 
-  @override
-  void didChangeAppLifecycleState(AppLifecycleState state) {
-    // Handle app lifecycle changes
-    if (state == AppLifecycleState.paused) {
-      // App is in background, consider saving state
-      final settings = Provider.of<SettingsProvider>(context, listen: false);
-      if (settings.recordingActive) {
-        // Optionally stop recording when app is in background
-        // _stopRecording();
-      }
-    } else if (state == AppLifecycleState.resumed) {
-      // App is in foreground again
-      if (_mapController != null) {
-        _applyMapStyle();
-      }
+  void _loadSavedRoadData() {
+    final roadData = _damageDetector.getRoadData();
+
+    for (var event in roadData) {
+      _addRoadDamageEvent(event, updateState: false);
+    }
+
+    setState(() {});
+  }
+
+  void _onRoadDamageEvent(RoadDamageEvent event) {
+    _addRoadDamageEvent(event);
+  }
+
+  void _addRoadDamageEvent(RoadDamageEvent event, {bool updateState = true}) {
+    final latLng = LatLng(event.latitude, event.longitude);
+
+    // Add to appropriate road segment
+    if (event.isDamaged) {
+      _roadSegments['damaged']!.add(latLng);
+    } else {
+      _roadSegments['smooth']!.add(latLng);
+    }
+
+    // Add marker
+    final markerId = 'marker_${event.timestamp}';
+    final marker = Marker(
+      markerId: MarkerId(markerId),
+      position: latLng,
+      icon: event.isDamaged ? _damageMarkerIcon! : _smoothMarkerIcon!,
+      infoWindow: InfoWindow(
+        title: event.isDamaged ? 'Damaged Road' : 'Smooth Road',
+        snippet: 'Severity: ${event.severity.toStringAsFixed(2)}',
+      ),
+    );
+
+    // Update polylines
+    _updatePolylines();
+
+    if (updateState) {
+      setState(() {
+        _markers.add(marker);
+      });
+    } else {
+      _markers.add(marker);
     }
   }
 
-  void _applyMapStyle() {
-    final settings = Provider.of<SettingsProvider>(context, listen: false);
-    if (settings.darkMode && _mapController != null) {
-      _mapController!.setMapStyle(_mapStyle);
-    } else if (_mapController != null) {
-      _mapController!.setMapStyle(null); // Reset to default style
+  void _updatePolylines() {
+    _polylines.clear();
+
+    // Add damaged road polyline if we have at least 2 points
+    if (_roadSegments['damaged']!.length >= 2) {
+      _polylines.add(
+        Polyline(
+          polylineId: PolylineId('damaged_roads'),
+          points: _roadSegments['damaged']!,
+          color: Colors.red,
+          width: 5,
+        ),
+      );
     }
+
+    // Add smooth road polyline if we have at least 2 points
+    if (_roadSegments['smooth']!.length >= 2) {
+      _polylines.add(
+        Polyline(
+          polylineId: PolylineId('smooth_roads'),
+          points: _roadSegments['smooth']!,
+          color: Colors.blue,
+          width: 5,
+        ),
+      );
+    }
+  }
+
+  void _toggleTracking() {
+    setState(() {
+      _isTracking = !_isTracking;
+
+      if (_isTracking) {
+        _damageDetector.startMonitoring();
+        if (_currentLocation != null) {
+          _updateCameraPosition(
+              LatLng(_currentLocation!.latitude!, _currentLocation!.longitude!)
+          );
+        }
+      } else {
+        _damageDetector.stopMonitoring();
+      }
+    });
   }
 
   @override
   void dispose() {
-    _stopRecording();
-    _mapController?.dispose();
-    _cooldownTimer?.cancel();
-    WidgetsBinding.instance.removeObserver(this);
+    _damageDetector.removeListener(_onRoadDamageEvent);
+    _damageDetector.stopMonitoring();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
-    final settings = Provider.of<SettingsProvider>(context);
-    final size = MediaQuery.of(context).size;
-
     return Scaffold(
       appBar: AppBar(
         title: Text('Road Damage Detector'),
         actions: [
           IconButton(
-            icon: Icon(Icons.tune),
-            onPressed: () => Navigator.pushNamed(context, CalibrationScreen.routeName),
-          ),
-          IconButton(
-            icon: Icon(Icons.history),
-            onPressed: () => Navigator.pushNamed(context, HistoryScreen.routeName).then((_) {
-              // Refresh markers when returning from history
-              _loadSavedMarkers();
-            }),
-          ),
-          IconButton(
-            icon: Icon(Icons.settings),
-            onPressed: () => Navigator.pushNamed(context, SettingsScreen.routeName),
+            icon: Icon(Icons.delete),
+            onPressed: () {
+              _showClearDataDialog();
+            },
           ),
         ],
       ),
       body: Stack(
         children: [
-          // Main Map
           GoogleMap(
-            onMapCreated: (controller) {
-              _mapController = controller;
-              _applyMapStyle();
-              setState(() {
-                _isMapReady = true;
-              });
-            },
-            initialCameraPosition: CameraPosition(target: _currentPosition, zoom: 15),
-            markers: _markers,
-            polylines: _polylines,
+            mapType: MapType.normal,
+            initialCameraPosition: _initialCameraPosition,
             myLocationEnabled: true,
             myLocationButtonEnabled: false,
-            mapType: _getMapType(settings.mapStyle),
-            onCameraMove: (_) {
-              // Disable follow mode if user manually moves the map
-              if (_isFollowingUser) {
-                setState(() {
-                  _isFollowingUser = false;
-                });
-              }
+            zoomControlsEnabled: false,
+            markers: _markers,
+            polylines: _polylines,
+            onMapCreated: (GoogleMapController controller) {
+              _controller.complete(controller);
             },
           ),
-
-          // Status Card
           Positioned(
             top: 16,
             left: 16,
-            child: StatusCard(
-              threshold: settings.threshold,
-              currentSeverity: _currentSeverity,
-              isDamaged: _isDamaged,
-              recordingActive: settings.recordingActive,
-              damageCount: _detectedDamageCount,
-              distanceTraveled: _distanceTraveled,
-              lastRecordTime: _lastRecordTime,
-            ),
-          ),
-
-          // Map Control Buttons
-          Positioned(
             right: 16,
-            bottom: 100,
-            child: Column(
-              children: [
-                // Follow user button
-                FloatingActionButton.small(
-                  heroTag: "followBtn",
-                  backgroundColor: _isFollowingUser ? Colors.blue : Colors.grey,
-                  onPressed: _toggleFollowUser,
-                  child: Icon(Icons.gps_fixed),
+            child: Card(
+              color: Colors.white.withOpacity(0.9),
+              child: Padding(
+                padding: const EdgeInsets.all(12.0),
+                child: Row(
+                  children: [
+                    Icon(
+                      Icons.info_outline,
+                      color: Colors.blue,
+                    ),
+                    SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        'Red lines indicate damaged roads, blue lines indicate smooth roads.',
+                        style: TextStyle(fontSize: 14),
+                      ),
+                    ),
+                  ],
                 ),
-                SizedBox(height: 8),
-                // Clear map button
-                FloatingActionButton.small(
-                  heroTag: "clearBtn",
-                  backgroundColor: Colors.white,
-                  onPressed: _clearMap,
-                  child: Icon(Icons.layers_clear, color: Colors.black87),
-                ),
-              ],
+              ),
             ),
           ),
         ],
       ),
-      floatingActionButton: FloatingActionButton.extended(
-        onPressed: _toggleRecording,
-        backgroundColor: settings.recordingActive ? Colors.red : Colors.green,
-        icon: Icon(settings.recordingActive ? Icons.stop : Icons.play_arrow),
-        label: Text(settings.recordingActive ? 'Stop' : 'Start'),
+      floatingActionButton: Column(
+        mainAxisAlignment: MainAxisAlignment.end,
+        children: [
+          FloatingActionButton(
+            heroTag: 'btn_my_location',
+            onPressed: () {
+              if (_currentLocation != null) {
+                _updateCameraPosition(
+                    LatLng(_currentLocation!.latitude!, _currentLocation!.longitude!)
+                );
+              }
+            },
+            child: Icon(Icons.my_location),
+            mini: true,
+          ),
+          SizedBox(height: 16),
+          FloatingActionButton.extended(
+            heroTag: 'btn_tracking',
+            onPressed: _toggleTracking,
+            label: Text(_isTracking ? 'Stop Tracking' : 'Start Tracking'),
+            icon: Icon(_isTracking ? Icons.stop : Icons.play_arrow),
+            backgroundColor: _isTracking ? Colors.red : Colors.green,
+          ),
+        ],
       ),
     );
   }
 
-  MapType _getMapType(String style) {
-    switch (style) {
-      case 'satellite':
-        return MapType.satellite;
-      case 'terrain':
-        return MapType.terrain;
-      default:
-        return MapType.normal;
-    }
+  void _showClearDataDialog() {
+    showDialog(
+      context: context,
+      builder: (BuildContext context) {
+        return AlertDialog(
+          title: Text('Clear Data'),
+          content: Text('Are you sure you want to clear all saved road data?'),
+          actions: [
+            TextButton(
+              child: Text('Cancel'),
+              onPressed: () {
+                Navigator.of(context).pop();
+              },
+            ),
+            TextButton(
+              child: Text('Clear', style: TextStyle(color: Colors.red)),
+              onPressed: () async {
+                await _damageDetector.clearData();
+                setState(() {
+                  _markers.clear();
+                  _polylines.clear();
+                  _roadSegments = {
+                    'damaged': [],
+                    'smooth': [],
+                  };
+                });
+                Navigator.of(context).pop();
+                ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(content: Text('All data cleared'))
+                );
+              },
+            ),
+          ],
+        );
+      },
+    );
   }
 }

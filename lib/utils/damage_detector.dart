@@ -1,214 +1,300 @@
 // lib/utils/damage_detector.dart
+import 'dart:async';
 import 'dart:math';
+import 'package:flutter/material.dart';
 import 'package:sensors_plus/sensors_plus.dart';
-
-class DamageResult {
-  final bool isDamaged;
-  final double severity;
-  final double confidence;
-
-  DamageResult({
-    required this.isDamaged,
-    required this.severity,
-    required this.confidence,
-  });
-}
+import 'package:location/location.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import 'package:device_info_plus/device_info_plus.dart'; // Add this for device ID
 
 class DamageDetector {
-  // Constants for detection tuning
-  static const int _windowSize = 20; // Number of readings to analyze
-  static const double _zAxisImpactWeight = 1.5; // Z-axis gets more weight (vertical movement)
-  static const double _minConfidenceThreshold = 0.7; // Min confidence for detection
+  // Singleton instance
+  static final DamageDetector _instance = DamageDetector._internal();
+  factory DamageDetector() => _instance;
+  DamageDetector._internal();
 
-  // Accelerometer readings history
-  final List<AccelerometerEvent> _accelHistory = [];
-  final List<GyroscopeEvent> _gyroHistory = [];
+  // Sensor streams
+  StreamSubscription<GyroscopeEvent>? _gyroscopeSubscription;
+  StreamSubscription<AccelerometerEvent>? _accelerometerSubscription;
+  StreamSubscription<LocationData>? _locationSubscription;
 
-  // Calculated baselines (device at rest values)
-  double _accelBaselineX = 0.0;
-  double _accelBaselineY = 0.0;
-  double _accelBaselineZ = 9.8; // Default earth gravity
-  double _gyroBaselineX = 0.0;
-  double _gyroBaselineY = 0.0;
-  double _gyroBaselineZ = 0.0;
+  // Current location
+  LocationData? _currentLocation;
+  final Location _locationService = Location();
 
-  // Detection state
-  bool _isCalibrated = false;
-  double _lastPeakMagnitude = 0.0;
+  // Detection thresholds
+  final double _gyroThreshold = 0.3; // Radians per second
+  final double _accelThreshold = 15.0; // m/s^2
 
-  // Add a new accelerometer reading
-  void addAccelerometerReading(AccelerometerEvent event) {
-    _accelHistory.add(event);
-    if (_accelHistory.length > _windowSize) {
-      _accelHistory.removeAt(0);
-    }
+  // Time window for detection to avoid duplicates
+  final int _cooldownPeriod = 5000; // milliseconds
+  int _lastDetectionTime = 0;
 
-    // Recalibrate if we have enough readings
-    if (_accelHistory.length >= _windowSize && !_isCalibrated) {
-      _calibrateBaselines();
-    }
+  // Listeners
+  final List<Function(RoadDamageEvent)> _listeners = [];
+
+  // Local storage for road data
+  List<RoadDamageEvent> _roadData = [];
+  bool _isRunning = false;
+  bool _initialized = false;
+
+  // Device ID for cloud storage
+  String _deviceId = 'unknown_device';
+
+  // Initialize the detector
+  Future<void> initialize() async {
+    if (_initialized) return;
+
+    // Get device ID
+    await _getDeviceId();
+
+    // Load saved data from SharedPreferences
+    await _loadSavedData();
+
+    // Setup location service
+    await _setupLocationService();
+
+    _initialized = true;
   }
 
-  // Add a new gyroscope reading
-  void addGyroscopeReading(GyroscopeEvent event) {
-    _gyroHistory.add(event);
-    if (_gyroHistory.length > _windowSize) {
-      _gyroHistory.removeAt(0);
-    }
-  }
-
-  // Calculate baseline values (sensor readings when device is relatively steady)
-  void _calibrateBaselines() {
-    if (_accelHistory.length < _windowSize || _gyroHistory.length < _windowSize) {
-      return;
-    }
-
-    // Calculate variance to see if device is steady enough for calibration
-    double varianceSum = _calculateAccelVariance();
-
-    // Only calibrate if variance is low (device is relatively still)
-    if (varianceSum < 2.0) {
-      double sumX = 0, sumY = 0, sumZ = 0;
-      double gyroSumX = 0, gyroSumY = 0, gyroSumZ = 0;
-
-      // Calculate averages
-      for (var reading in _accelHistory) {
-        sumX += reading.x;
-        sumY += reading.y;
-        sumZ += reading.z;
+  // Get unique device ID
+  Future<void> _getDeviceId() async {
+    try {
+      final deviceInfo = DeviceInfoPlugin();
+      if (Theme.of(null).platform == TargetPlatform.iOS) {
+        final iosInfo = await deviceInfo.iosInfo;
+        _deviceId = iosInfo.identifierForVendor ?? 'unknown_ios_device';
+      } else if (Theme.of(null).platform == TargetPlatform.android) {
+        final androidInfo = await deviceInfo.androidInfo;
+        _deviceId = androidInfo.id;
       }
+    } catch (e) {
+      print('Failed to get device ID: $e');
+      _deviceId = 'unknown_device_${DateTime.now().millisecondsSinceEpoch}';
+    }
+  }
 
-      for (var reading in _gyroHistory) {
-        gyroSumX += reading.x;
-        gyroSumY += reading.y;
-        gyroSumZ += reading.z;
+  Future<void> _loadSavedData() async {
+    final prefs = await SharedPreferences.getInstance();
+    final savedData = prefs.getStringList('road_damage_data') ?? [];
+
+    _roadData = savedData.map((data) {
+      final parts = data.split('|');
+      return RoadDamageEvent(
+        latitude: double.parse(parts[0]),
+        longitude: double.parse(parts[1]),
+        severity: double.parse(parts[2]),
+        timestamp: int.parse(parts[3]),
+        isDamaged: parts[4] == 'true',
+      );
+    }).toList();
+  }
+
+  Future<void> _saveData() async {
+    final prefs = await SharedPreferences.getInstance();
+    final dataToSave = _roadData.map((event) =>
+    '${event.latitude}|${event.longitude}|${event.severity}|${event.timestamp}|${event.isDamaged}'
+    ).toList();
+
+    await prefs.setStringList('road_damage_data', dataToSave);
+  }
+
+  Future<void> _setupLocationService() async {
+    bool serviceEnabled = await _locationService.serviceEnabled();
+    if (!serviceEnabled) {
+      serviceEnabled = await _locationService.requestService();
+      if (!serviceEnabled) {
+        throw Exception('Location service not enabled');
       }
-
-      // Update baselines
-      _accelBaselineX = sumX / _accelHistory.length;
-      _accelBaselineY = sumY / _accelHistory.length;
-      _accelBaselineZ = sumZ / _accelHistory.length;
-
-      _gyroBaselineX = gyroSumX / _gyroHistory.length;
-      _gyroBaselineY = gyroSumY / _gyroHistory.length;
-      _gyroBaselineZ = gyroSumZ / _gyroHistory.length;
-
-      _isCalibrated = true;
-    }
-  }
-
-  // Calculate the variance of accelerometer readings (to check if device is steady)
-  double _calculateAccelVariance() {
-    if (_accelHistory.length < 3) return double.infinity;
-
-    // Calculate mean
-    double meanX = 0, meanY = 0, meanZ = 0;
-    for (var reading in _accelHistory) {
-      meanX += reading.x;
-      meanY += reading.y;
-      meanZ += reading.z;
-    }
-    meanX /= _accelHistory.length;
-    meanY /= _accelHistory.length;
-    meanZ /= _accelHistory.length;
-
-    // Calculate variance
-    double varX = 0, varY = 0, varZ = 0;
-    for (var reading in _accelHistory) {
-      varX += pow(reading.x - meanX, 2);
-      varY += pow(reading.y - meanY, 2);
-      varZ += pow(reading.z - meanZ, 2);
-    }
-    varX /= _accelHistory.length;
-    varY /= _accelHistory.length;
-    varZ /= _accelHistory.length;
-
-    return varX + varY + varZ;
-  }
-
-  // Check if current readings indicate a road damage
-  DamageResult checkForDamage(double threshold) {
-    if (!_isCalibrated || _accelHistory.length < _windowSize || _gyroHistory.length < _windowSize) {
-      return DamageResult(isDamaged: false, severity: 0.0, confidence: 0.0);
     }
 
-    // Get the latest readings
-    AccelerometerEvent latestAccel = _accelHistory.last;
-    GyroscopeEvent latestGyro = _gyroHistory.last;
-
-    // Calculate deviation from baseline
-    double accelDevX = (latestAccel.x - _accelBaselineX).abs();
-    double accelDevY = (latestAccel.y - _accelBaselineY).abs();
-    double accelDevZ = (latestAccel.z - _accelBaselineZ).abs() * _zAxisImpactWeight; // Z gets more weight
-
-    double gyroDevX = (latestGyro.x - _gyroBaselineX).abs();
-    double gyroDevY = (latestGyro.y - _gyroBaselineY).abs();
-    double gyroDevZ = (latestGyro.z - _gyroBaselineZ).abs();
-
-    // Combined severity calculation (weighted sum of deviations)
-    double accelSeverity = (accelDevX + accelDevY + accelDevZ) / 3;
-    double gyroSeverity = (gyroDevX + gyroDevY + gyroDevZ) / 3;
-
-    // Final severity is weighted average of both sensors
-    // Gyro gets more weight as it's better for detecting angular changes (bumps)
-    double severityValue = (accelSeverity * 0.3 + gyroSeverity * 0.7);
-
-    // Update peak if this is higher
-    if (severityValue > _lastPeakMagnitude) {
-      _lastPeakMagnitude = severityValue;
+    PermissionStatus permissionStatus = await _locationService.hasPermission();
+    if (permissionStatus == PermissionStatus.denied) {
+      permissionStatus = await _locationService.requestPermission();
+      if (permissionStatus != PermissionStatus.granted) {
+        throw Exception('Location permission not granted');
+      }
     }
 
-    // Calculate confidence based on consistency of readings
-    double confidence = _calculateConfidence();
-
-    // Finally determine if this is damage
-    bool isDamaged = severityValue > threshold && confidence > _minConfidenceThreshold;
-
-    return DamageResult(
-      isDamaged: isDamaged,
-      severity: severityValue,
-      confidence: confidence,
+    // Configure location settings
+    await _locationService.changeSettings(
+      accuracy: LocationAccuracy.high,
+      interval: 5000, // 5 seconds
+      distanceFilter: 10, // 10 meters
     );
   }
 
-  // Calculate confidence based on consistency of readings
-  double _calculateConfidence() {
-    if (_accelHistory.length < _windowSize) return 0.0;
+  // Start monitoring
+  void startMonitoring() {
+    if (_isRunning) return;
+    _isRunning = true;
 
-    // Calculate standard deviation of recent readings
-    List<double> magnitudes = [];
-    for (var reading in _accelHistory) {
-      double mx = reading.x - _accelBaselineX;
-      double my = reading.y - _accelBaselineY;
-      double mz = reading.z - _accelBaselineZ;
-      magnitudes.add(sqrt(mx * mx + my * my + mz * mz));
+    // Setup gyroscope stream
+    _gyroscopeSubscription = gyroscopeEvents.listen((GyroscopeEvent event) {
+      _processGyroscopeData(event);
+    });
+
+    // Setup accelerometer stream
+    _accelerometerSubscription = accelerometerEvents.listen((AccelerometerEvent event) {
+      _processAccelerometerData(event);
+    });
+
+    // Setup location stream
+    _locationSubscription = _locationService.onLocationChanged.listen((LocationData location) {
+      _currentLocation = location;
+      // Log smooth road segments periodically
+      _logSmoothRoad();
+    });
+  }
+
+  // Stop monitoring
+  void stopMonitoring() {
+    _isRunning = false;
+    _gyroscopeSubscription?.cancel();
+    _accelerometerSubscription?.cancel();
+    _locationSubscription?.cancel();
+    _saveData();
+  }
+
+  // Process gyroscope data
+  void _processGyroscopeData(GyroscopeEvent event) {
+    if (_currentLocation == null) return;
+
+    // Calculate magnitude of rotation
+    final magnitude = sqrt(pow(event.x, 2) + pow(event.y, 2) + pow(event.z, 2));
+
+    // Check against threshold
+    if (magnitude > _gyroThreshold) {
+      _checkAndLogDamage(magnitude);
+    }
+  }
+
+  // Process accelerometer data
+  void _processAccelerometerData(AccelerometerEvent event) {
+    if (_currentLocation == null) return;
+
+    // Calculate magnitude of acceleration (excluding gravity)
+    final double gForce = sqrt(pow(event.x, 2) + pow(event.y, 2) + pow(event.z - 9.8, 2));
+
+    // Check against threshold
+    if (gForce > _accelThreshold) {
+      _checkAndLogDamage(gForce);
+    }
+  }
+
+  // Check cooldown period and log damage if appropriate
+  void _checkAndLogDamage(double severity) {
+    final now = DateTime.now().millisecondsSinceEpoch;
+
+    // Check if we're still in cooldown period
+    if (now - _lastDetectionTime < _cooldownPeriod) {
+      return;
     }
 
-    double mean = magnitudes.reduce((a, b) => a + b) / magnitudes.length;
-    double sumSquaredDiff = magnitudes.fold(0, (sum, val) => sum + pow(val - mean, 2));
-    double stdDev = sqrt(sumSquaredDiff / magnitudes.length);
+    _lastDetectionTime = now;
+    final event = RoadDamageEvent(
+      latitude: _currentLocation!.latitude!,
+      longitude: _currentLocation!.longitude!,
+      severity: severity,
+      timestamp: now,
+      isDamaged: true,
+    );
 
-    // Normalize standard deviation to get confidence
-    // Lower stdDev means higher confidence (more consistent readings)
-    double confidence = 1.0 - min(1.0, stdDev / 5.0);
+    // Add to local data
+    _roadData.add(event);
 
-    return confidence;
+    // Notify listeners
+    for (var listener in _listeners) {
+      listener(event);
+    }
+
+    // Save to cloud if enabled
+    _saveToCloud(event);
+
+    // Save locally
+    _saveData();
   }
 
-  // Manually force calibration (useful after device position changes)
-  void forceCalibrate() {
-    _isCalibrated = false;
-    _calibrateBaselines();
+  // Log smooth road periodically
+  void _logSmoothRoad() {
+    if (_currentLocation == null) return;
+
+    final now = DateTime.now().millisecondsSinceEpoch;
+
+    // Log smooth road every 30 seconds
+    if (now - _lastDetectionTime > 30000) {
+      final event = RoadDamageEvent(
+        latitude: _currentLocation!.latitude!,
+        longitude: _currentLocation!.longitude!,
+        severity: 0.0,
+        timestamp: now,
+        isDamaged: false,
+      );
+
+      // Add to local data
+      _roadData.add(event);
+
+      // Notify listeners
+      for (var listener in _listeners) {
+        listener(event);
+      }
+    }
   }
 
-  // Check if the detector is calibrated
-  bool get isCalibrated => _isCalibrated;
-
-  // Get the last detected peak magnitude
-  double get lastPeakMagnitude => _lastPeakMagnitude;
-
-  // Reset the peak magnitude
-  void resetPeak() {
-    _lastPeakMagnitude = 0.0;
+  // Save data to Firebase
+  void _saveToCloud(RoadDamageEvent event) {
+    try {
+      FirebaseFirestore.instance.collection('road_damage').add({
+        'latitude': event.latitude,
+        'longitude': event.longitude,
+        'severity': event.severity,
+        'timestamp': event.timestamp,
+        'isDamaged': event.isDamaged,
+        'device_id': _deviceId,
+        'created_at': FieldValue.serverTimestamp(),
+      });
+    } catch (e) {
+      print('Failed to save to cloud: $e');
+    }
   }
+
+  // Add listener for road damage events
+  void addListener(Function(RoadDamageEvent) listener) {
+    _listeners.add(listener);
+  }
+
+  // Remove listener
+  void removeListener(Function(RoadDamageEvent) listener) {
+    _listeners.remove(listener);
+  }
+
+  // Get all road data
+  List<RoadDamageEvent> getRoadData() {
+    return _roadData;
+  }
+
+  // Clear all saved data
+  Future<void> clearData() async {
+    _roadData.clear();
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove('road_damage_data');
+  }
+}
+
+// Road damage event model
+class RoadDamageEvent {
+  final double latitude;
+  final double longitude;
+  final double severity;
+  final int timestamp;
+  final bool isDamaged;
+
+  RoadDamageEvent({
+    required this.latitude,
+    required this.longitude,
+    required this.severity,
+    required this.timestamp,
+    required this.isDamaged,
+  });
 }

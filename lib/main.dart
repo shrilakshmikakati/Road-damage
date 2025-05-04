@@ -1,6 +1,8 @@
 // lib/main.dart
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import 'package:firebase_core/firebase_core.dart';
+import 'package:firebase_core/firebase_core.dart';
 import 'provider/settings_provider.dart';
 import 'screens/splash_screen.dart';
 import 'screens/home_map_screen.dart';
@@ -8,7 +10,15 @@ import 'screens/calibration_screen.dart';
 import 'screens/history_screen.dart';
 import 'screens/settings_screen.dart';
 
-void main() {
+void main() async{
+
+  WidgetsFlutterBinding.ensureInitialized();
+
+  // Initialize Firebase
+  await Firebase.initializeApp(
+    options: DefaultFirebaseOptions.currentPlatform,
+  );
+
   runApp(
     ChangeNotifierProvider(
       create: (_) => SettingsProvider(),
