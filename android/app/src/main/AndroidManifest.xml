@@ -3,6 +3,11 @@
         android:label="road_damage_haha"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher">
+
+        <meta-data
+            android:name="com.google.android.geo.API_KEY"
+            android:value="@string/MAPS_API_KEY"  />
+
         <activity
             android:name=".MainActivity"
             android:exported="true"
@@ -30,9 +35,7 @@
         <meta-data
             android:name="flutterEmbedding"
             android:value="2" />
-        <meta-data
-            android:name="com.google.android.geo.AIzaSyAu0yZVNl9GzKKkyhHhJxpmJb-bKSdKob0"
-            android:value="AIzaSyAu0yZVNl9GzKKkyhHhJxpmJb-bKSdKob0" />
+
     </application>
     <!-- Required to query activities that can process text, see:
          https://developer.android.com/training/package-visibility and

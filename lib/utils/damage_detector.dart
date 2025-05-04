@@ -1,7 +1,7 @@
 // lib/utils/damage_detector.dart
 import 'dart:async';
 import 'dart:math';
-import 'package:flutter/material.dart';
+import 'dart:io';
 import 'package:sensors_plus/sensors_plus.dart';
 import 'package:location/location.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
@@ -62,10 +62,11 @@ class DamageDetector {
   Future<void> _getDeviceId() async {
     try {
       final deviceInfo = DeviceInfoPlugin();
-      if (Theme.of(null).platform == TargetPlatform.iOS) {
+
+      if (Platform.isIOS) {
         final iosInfo = await deviceInfo.iosInfo;
         _deviceId = iosInfo.identifierForVendor ?? 'unknown_ios_device';
-      } else if (Theme.of(null).platform == TargetPlatform.android) {
+      } else if (Platform.isAndroid) {
         final androidInfo = await deviceInfo.androidInfo;
         _deviceId = androidInfo.id;
       }

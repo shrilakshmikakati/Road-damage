@@ -3,8 +3,7 @@ import 'dart:convert';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../models/damage_record.dart';
 import '../services/cloud_sync_service.dart';
-import 'package:provider/provider.dart';
-import '../provider/settings_provider.dart';
+
 
 class DamageRepository {
   static const String _storageKey = 'damage_records';
