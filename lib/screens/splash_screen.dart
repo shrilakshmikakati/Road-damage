@@ -16,7 +16,7 @@ class _SplashScreenState extends State<SplashScreen> with SingleTickerProviderSt
   late Animation<double> _animation;
   bool _permissionsChecked = false;
   String _statusMessage = "Initializing...";
-  List<Permission> _requiredPermissions = [
+  final List<Permission> _requiredPermissions = [
     Permission.location,
     Permission.locationAlways,
     Permission.sensors,
@@ -99,7 +99,7 @@ class _SplashScreenState extends State<SplashScreen> with SingleTickerProviderSt
                   decoration: BoxDecoration(
                     color: Colors.white,
                     shape: BoxShape.circle,
-                    boxShadow: [
+                    boxShadow: const [
                       BoxShadow(
                         color: Colors.black26,
                         blurRadius: 10,
@@ -109,7 +109,7 @@ class _SplashScreenState extends State<SplashScreen> with SingleTickerProviderSt
                   ),
                   child: Center(
                     child: Icon(
-                      Icons.road,
+                      Icons.add_road, // Changed from Icons.road to Icons.add_road which exists
                       size: 80,
                       color: Theme.of(context).primaryColor,
                     ),
@@ -122,7 +122,7 @@ class _SplashScreenState extends State<SplashScreen> with SingleTickerProviderSt
               // App name with scale animation
               ScaleTransition(
                 scale: _animation,
-                child: Text(
+                child: const Text(
                   "Road Damage Detector",
                   style: TextStyle(
                     fontSize: 28,
@@ -137,7 +137,7 @@ class _SplashScreenState extends State<SplashScreen> with SingleTickerProviderSt
               // Status message
               Text(
                 _statusMessage,
-                style: TextStyle(
+                style: const TextStyle(
                   fontSize: 16,
                   color: Colors.white70,
                 ),
@@ -146,7 +146,7 @@ class _SplashScreenState extends State<SplashScreen> with SingleTickerProviderSt
               const SizedBox(height: 40),
 
               // Loading indicator
-              CircularProgressIndicator(
+              const CircularProgressIndicator(
                 valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
               ),
 
@@ -160,7 +160,7 @@ class _SplashScreenState extends State<SplashScreen> with SingleTickerProviderSt
                     return FutureBuilder<PermissionStatus>(
                       future: permission.status,
                       builder: (context, snapshot) {
-                        if (!snapshot.hasData) return SizedBox.shrink();
+                        if (!snapshot.hasData) return const SizedBox.shrink();
 
                         bool isGranted = snapshot.data?.isGranted ?? false;
 
