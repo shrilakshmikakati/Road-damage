@@ -2,6 +2,18 @@
 import 'dart:math';
 import 'package:sensors_plus/sensors_plus.dart';
 
+class DamageResult {
+  final bool isDamaged;
+  final double severity;
+  final double confidence;
+
+  DamageResult({
+    required this.isDamaged,
+    required this.severity,
+    required this.confidence,
+  });
+}
+
 class DamageDetector {
   // Constants for detection tuning
   static const int _windowSize = 20; // Number of readings to analyze
@@ -121,4 +133,72 @@ class DamageDetector {
     }
 
     // Get the latest readings
-    AccelerometerEvent latestAccel =
+    AccelerometerEvent latestAccel = _accelHistory.last;
+    GyroscopeEvent latestGyro = _gyroHistory.last;
+
+    // Calculate deviation from baseline
+    double accelDevX = (latestAccel.x - _accelBaselineX).abs();
+    double accelDevY = (latestAccel.y - _accelBaselineY).abs();
+    double accelDevZ = (latestAccel.z - _accelBaselineZ).abs() * _zAxisImpactWeight; // Z-axis weighted more
+
+    double gyroDevX = (latestGyro.x - _gyroBaselineX).abs();
+    double gyroDevY = (latestGyro.y - _gyroBaselineY).abs();
+    double gyroDevZ = (latestGyro.z - _gyroBaselineZ).abs();
+
+    // Calculate composite severity
+    // We combine accelerometer and gyroscope data for better accuracy
+    double accelMagnitude = sqrt(accelDevX * accelDevX + accelDevY * accelDevY + accelDevZ * accelDevZ);
+    double gyroMagnitude = sqrt(gyroDevX * gyroDevX + gyroDevY * gyroDevY + gyroDevZ * gyroDevZ);
+
+    // Detect peaks in the signal
+    double compositeMagnitude = (accelMagnitude * 0.6 + gyroMagnitude * 0.4);
+
+    // Update peak if current magnitude is higher
+    if (compositeMagnitude > _lastPeakMagnitude) {
+      _lastPeakMagnitude = compositeMagnitude;
+    } else {
+      // Decay the peak over time to reset after a while
+      _lastPeakMagnitude *= 0.95;
+    }
+
+    // Calculate confidence based on signal-to-noise ratio
+    double noiseLevel = _calculateNoiseLevel();
+    double signalToNoise = noiseLevel > 0 ? compositeMagnitude / noiseLevel : 0;
+    double confidence = min(signalToNoise / 5.0, 1.0); // Cap at 1.0
+
+    // Determine if this is a damage event
+    bool isDamaged = compositeMagnitude > threshold && confidence > _minConfidenceThreshold;
+
+    return DamageResult(
+      isDamaged: isDamaged,
+      severity: compositeMagnitude,
+      confidence: confidence,
+    );
+  }
+
+  // Calculate noise level from recent readings
+  double _calculateNoiseLevel() {
+    if (_accelHistory.length < 5) return 1.0; // Default if not enough data
+
+    // Use the standard deviation of recent readings as noise estimate
+    List<double> magnitudes = [];
+    for (int i = max(0, _accelHistory.length - 5); i < _accelHistory.length; i++) {
+      AccelerometerEvent event = _accelHistory[i];
+      double devX = (event.x - _accelBaselineX).abs();
+      double devY = (event.y - _accelBaselineY).abs();
+      double devZ = (event.z - _accelBaselineZ).abs();
+      magnitudes.add(sqrt(devX * devX + devY * devY + devZ * devZ));
+    }
+
+    // Calculate standard deviation
+    double mean = magnitudes.reduce((a, b) => a + b) / magnitudes.length;
+    double variance = magnitudes.fold(0.0, (sum, val) => sum + pow(val - mean, 2)) / magnitudes.length;
+    return sqrt(variance) + 0.1; // Add small constant to avoid division by zero
+  }
+
+  // Force recalibration (e.g., on user request)
+  void recalibrate() {
+    _isCalibrated = false;
+    _lastPeakMagnitude = 0.0;
+  }
+}
