@@ -1,301 +1,371 @@
 // lib/utils/damage_detector.dart
 import 'dart:async';
-import 'dart:math';
-import 'dart:io';
+import 'dart:convert';
+import 'package:flutter/foundation.dart';
 import 'package:sensors_plus/sensors_plus.dart';
 import 'package:location/location.dart';
-import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:device_info_plus/device_info_plus.dart'; // Add this for device ID
+import 'package:uuid/uuid.dart';
+import '../models/damage_record.dart';
+import '../services/damage_ai_service.dart';
 
-class DamageDetector {
-  // Singleton instance
-  static final DamageDetector _instance = DamageDetector._internal();
-  factory DamageDetector() => _instance;
-  DamageDetector._internal();
+class RoadDamageEvent {
+  final double latitude;
+  final double longitude;
+  final double severity;
+  final bool isDamaged;
+  final DateTime timestamp;
+  final RoadFeatureType featureType;
 
-  // Sensor streams
-  StreamSubscription<GyroscopeEvent>? _gyroscopeSubscription;
+  RoadDamageEvent({
+    required this.latitude,
+    required this.longitude,
+    required this.severity,
+    required this.isDamaged,
+    required this.timestamp,
+    required this.featureType,
+  });
+
+  Map<String, dynamic> toJson() {
+    return {
+      'latitude': latitude,
+      'longitude': longitude,
+      'severity': severity,
+      'isDamaged': isDamaged,
+      'timestamp': timestamp.millisecondsSinceEpoch,
+      'featureType': featureType.toString(),
+    };
+  }
+
+  factory RoadDamageEvent.fromJson(Map<String, dynamic> json) {
+    return RoadDamageEvent(
+      latitude: json['latitude'],
+      longitude: json['longitude'],
+      severity: json['severity'],
+      isDamaged: json['isDamaged'],
+      timestamp: DateTime.fromMillisecondsSinceEpoch(json['timestamp']),
+      featureType: RoadFeatureType.values.firstWhere(
+            (e) => e.toString() == json['featureType'],
+        orElse: () => RoadFeatureType.smooth,
+      ),
+    );
+  }
+}
+
+class DamageDetector extends ChangeNotifier {
+  static const String _storageKey = 'road_damage_events';
+
+  // Location service
+  final Location _locationService = Location();
+  LocationData? _currentLocation;
+
+  // AI service
+  final DamageAIService _aiService = DamageAIService();
+
+  // List of detected road damage events
+  List<RoadDamageEvent> _events = [];
+
+  // Streaming subscriptions
   StreamSubscription<AccelerometerEvent>? _accelerometerSubscription;
+  StreamSubscription<GyroscopeEvent>? _gyroscopeSubscription;
   StreamSubscription<LocationData>? _locationSubscription;
 
-  // Current location
-  LocationData? _currentLocation;
-  final Location _locationService = Location();
+  // Tracking state
+  bool _isMonitoring = false;
+  bool _isInitialized = false;
 
-  // Detection thresholds
-  final double _gyroThreshold = 0.3; // Radians per second
-  final double _accelThreshold = 15.0; // m/s^2
+  // Settings
+  double _damageThreshold = 2.0; // Default threshold
 
-  // Time window for detection to avoid duplicates
-  final int _cooldownPeriod = 5000; // milliseconds
-  int _lastDetectionTime = 0;
+  // AI mode
+  bool _isAIEnabled = true;
 
-  // Listeners
-  final List<Function(RoadDamageEvent)> _listeners = [];
-
-  // Local storage for road data
-  List<RoadDamageEvent> _roadData = [];
-  bool _isRunning = false;
-  bool _initialized = false;
-
-  // Device ID for cloud storage
-  String _deviceId = 'unknown_device';
+  // Training mode
+  bool _isTrainingMode = false;
 
   // Initialize the detector
   Future<void> initialize() async {
-    if (_initialized) return;
+    if (_isInitialized) return;
 
-    // Get device ID
-    await _getDeviceId();
-
-    // Load saved data from SharedPreferences
-    await _loadSavedData();
-
-    // Setup location service
-    await _setupLocationService();
-
-    _initialized = true;
-  }
-
-  // Get unique device ID
-  Future<void> _getDeviceId() async {
-    try {
-      final deviceInfo = DeviceInfoPlugin();
-
-      if (Platform.isIOS) {
-        final iosInfo = await deviceInfo.iosInfo;
-        _deviceId = iosInfo.identifierForVendor ?? 'unknown_ios_device';
-      } else if (Platform.isAndroid) {
-        final androidInfo = await deviceInfo.androidInfo;
-        _deviceId = androidInfo.id;
-      }
-    } catch (e) {
-      print('Failed to get device ID: $e');
-      _deviceId = 'unknown_device_${DateTime.now().millisecondsSinceEpoch}';
-    }
-  }
-
-  Future<void> _loadSavedData() async {
+    // Load settings
     final prefs = await SharedPreferences.getInstance();
-    final savedData = prefs.getStringList('road_damage_data') ?? [];
+    _damageThreshold = prefs.getDouble('damage_threshold') ?? 2.0;
+    _isAIEnabled = prefs.getBool('ai_enabled') ?? true;
 
-    _roadData = savedData.map((data) {
-      final parts = data.split('|');
-      return RoadDamageEvent(
-        latitude: double.parse(parts[0]),
-        longitude: double.parse(parts[1]),
-        severity: double.parse(parts[2]),
-        timestamp: int.parse(parts[3]),
-        isDamaged: parts[4] == 'true',
-      );
-    }).toList();
-  }
+    // Initialize location service
+    await _locationService.changeSettings(
+      accuracy: LocationAccuracy.high,
+      interval: 1000,
+      distanceFilter: 5,
+    );
 
-  Future<void> _saveData() async {
-    final prefs = await SharedPreferences.getInstance();
-    final dataToSave = _roadData.map((event) =>
-    '${event.latitude}|${event.longitude}|${event.severity}|${event.timestamp}|${event.isDamaged}'
-    ).toList();
-
-    await prefs.setStringList('road_damage_data', dataToSave);
-  }
-
-  Future<void> _setupLocationService() async {
+    // Request permission
     bool serviceEnabled = await _locationService.serviceEnabled();
     if (!serviceEnabled) {
       serviceEnabled = await _locationService.requestService();
       if (!serviceEnabled) {
-        throw Exception('Location service not enabled');
+        return;
       }
     }
 
-    PermissionStatus permissionStatus = await _locationService.hasPermission();
+    var permissionStatus = await _locationService.hasPermission();
     if (permissionStatus == PermissionStatus.denied) {
       permissionStatus = await _locationService.requestPermission();
       if (permissionStatus != PermissionStatus.granted) {
-        throw Exception('Location permission not granted');
+        return;
       }
     }
 
-    // Configure location settings
-    await _locationService.changeSettings(
-      accuracy: LocationAccuracy.high,
-      interval: 5000, // 5 seconds
-      distanceFilter: 10, // 10 meters
-    );
+    // Initialize AI service
+    await _aiService.initialize();
+
+    // Load saved events
+    await _loadEvents();
+
+    _isInitialized = true;
   }
 
-  // Start monitoring
+  // Load saved events
+  Future<void> _loadEvents() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final jsonList = prefs.getStringList(_storageKey) ?? [];
+
+      _events = jsonList.map((str) =>
+          RoadDamageEvent.fromJson(jsonDecode(str))
+      ).toList();
+    } catch (e) {
+      if (kDebugMode) {
+        print('Error loading road damage events: $e');
+      }
+      _events = [];
+    }
+  }
+
+  // Save events
+  Future<void> _saveEvents() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final jsonList = _events.map((event) =>
+          jsonEncode(event.toJson())
+      ).toList();
+
+      await prefs.setStringList(_storageKey, jsonList);
+    } catch (e) {
+      if (kDebugMode) {
+        print('Error saving road damage events: $e');
+      }
+    }
+  }
+
+  // Start monitoring for road damage
   void startMonitoring() {
-    if (_isRunning) return;
-    _isRunning = true;
+    if (_isMonitoring) return;
 
-    // Setup gyroscope stream
-    _gyroscopeSubscription = gyroscopeEvents.listen((GyroscopeEvent event) {
-      _processGyroscopeData(event);
-    });
+    // Subscribe to sensor events
+    const samplingPeriod = Duration(milliseconds: 200); // 5 Hz sampling
 
-    // Setup accelerometer stream
-    _accelerometerSubscription = accelerometerEvents.listen((AccelerometerEvent event) {
-      _processAccelerometerData(event);
-    });
+    _accelerometerSubscription = userAccelerometerEvents.listen(
+          (AccelerometerEvent event) {
+        _processAccelerometerData(event);
+      },
+    );
 
-    // Setup location stream
-    _locationSubscription = _locationService.onLocationChanged.listen((LocationData location) {
-      _currentLocation = location;
-      // Log smooth road segments periodically
-      _logSmoothRoad();
-    });
+    _gyroscopeSubscription = gyroscopeEvents.listen(
+          (GyroscopeEvent event) {
+        _processGyroscopeData(event);
+      },
+    );
+
+    // Subscribe to location updates
+    _locationSubscription = _locationService.onLocationChanged.listen(
+          (LocationData location) {
+        _currentLocation = location;
+      },
+    );
+
+    _isMonitoring = true;
+    notifyListeners();
   }
 
   // Stop monitoring
   void stopMonitoring() {
-    _isRunning = false;
-    _gyroscopeSubscription?.cancel();
+    if (!_isMonitoring) return;
+
     _accelerometerSubscription?.cancel();
+    _gyroscopeSubscription?.cancel();
     _locationSubscription?.cancel();
-    _saveData();
-  }
 
-  // Process gyroscope data
-  void _processGyroscopeData(GyroscopeEvent event) {
-    if (_currentLocation == null) return;
+    _accelerometerSubscription = null;
+    _gyroscopeSubscription = null;
+    _locationSubscription = null;
 
-    // Calculate magnitude of rotation
-    final magnitude = sqrt(pow(event.x, 2) + pow(event.y, 2) + pow(event.z, 2));
-
-    // Check against threshold
-    if (magnitude > _gyroThreshold) {
-      _checkAndLogDamage(magnitude);
-    }
+    _isMonitoring = false;
+    notifyListeners();
   }
 
   // Process accelerometer data
   void _processAccelerometerData(AccelerometerEvent event) {
     if (_currentLocation == null) return;
 
-    // Calculate magnitude of acceleration (excluding gravity)
-    final double gForce = sqrt(pow(event.x, 2) + pow(event.y, 2) + pow(event.z - 9.8, 2));
-
-    // Check against threshold
-    if (gForce > _accelThreshold) {
-      _checkAndLogDamage(gForce);
-    }
-  }
-
-  // Check cooldown period and log damage if appropriate
-  void _checkAndLogDamage(double severity) {
-    final now = DateTime.now().millisecondsSinceEpoch;
-
-    // Check if we're still in cooldown period
-    if (now - _lastDetectionTime < _cooldownPeriod) {
-      return;
-    }
-
-    _lastDetectionTime = now;
-    final event = RoadDamageEvent(
-      latitude: _currentLocation!.latitude!,
-      longitude: _currentLocation!.longitude!,
-      severity: severity,
-      timestamp: now,
-      isDamaged: true,
+    // Add data to AI service
+    final motionData = MotionData(
+      accelerationX: event.x,
+      accelerationY: event.y,
+      accelerationZ: event.z,
+      gyroX: 0, // Will be updated from gyroscope event
+      gyroY: 0,
+      gyroZ: 0,
+      timestamp: DateTime.now(),
     );
 
-    // Add to local data
-    _roadData.add(event);
+    _aiService.addMotionData(motionData);
 
-    // Notify listeners
-    for (var listener in _listeners) {
-      listener(event);
+    // Analyze data
+    if (_isAIEnabled) {
+      _analyzeWithAI();
+    } else {
+      _analyzeWithSimpleThreshold(event);
     }
-
-    // Save to cloud if enabled
-    _saveToCloud(event);
-
-    // Save locally
-    _saveData();
   }
 
-  // Log smooth road periodically
-  void _logSmoothRoad() {
+  // Process gyroscope data
+  void _processGyroscopeData(GyroscopeEvent event) {
+    // The gyroscope data is used by the AI service
+    // It doesn't directly trigger damage detection
+  }
+
+  // Analyze with simple threshold (legacy method)
+  void _analyzeWithSimpleThreshold(AccelerometerEvent event) {
     if (_currentLocation == null) return;
 
-    final now = DateTime.now().millisecondsSinceEpoch;
+    // Calculate magnitude of acceleration
+    double magnitude = sqrt(event.x * event.x + event.y * event.y + event.z * event.z);
 
-    // Log smooth road every 30 seconds
-    if (now - _lastDetectionTime > 30000) {
-      final event = RoadDamageEvent(
+    // Check if magnitude exceeds threshold
+    if (magnitude > _damageThreshold) {
+      // Create damage event
+      final damageEvent = RoadDamageEvent(
         latitude: _currentLocation!.latitude!,
         longitude: _currentLocation!.longitude!,
-        severity: 0.0,
-        timestamp: now,
-        isDamaged: false,
+        severity: magnitude,
+        isDamaged: true,
+        timestamp: DateTime.now(),
+        featureType: RoadFeatureType.pothole, // Default classification
       );
 
-      // Add to local data
-      _roadData.add(event);
-
-      // Notify listeners
-      for (var listener in _listeners) {
-        listener(event);
-      }
+      // Add to list and notify listeners
+      _events.add(damageEvent);
+      _saveEvents();
+      notifyListeners();
     }
   }
 
-  // Save data to Firebase
-  void _saveToCloud(RoadDamageEvent event) {
-    try {
-      FirebaseFirestore.instance.collection('road_damage').add({
-        'latitude': event.latitude,
-        'longitude': event.longitude,
-        'severity': event.severity,
-        'timestamp': event.timestamp,
-        'isDamaged': event.isDamaged,
-        'device_id': _deviceId,
-        'created_at': FieldValue.serverTimestamp(),
-      });
-    } catch (e) {
-      print('Failed to save to cloud: $e');
+  // Analyze with AI
+  void _analyzeWithAI() {
+    if (_currentLocation == null) return;
+
+    // Get current position
+    final position = LatLng(
+      _currentLocation!.latitude!,
+      _currentLocation!.longitude!,
+    );
+
+    // Analyze current buffer
+    final result = _aiService.analyzeCurrentBuffer(position);
+
+    // Check if it's a significant road feature
+    if (result.featureType != RoadFeatureType.smooth || result.severity > _damageThreshold) {
+      // If in training mode, don't add to events
+      if (_isTrainingMode) return;
+
+      // Create damage event
+      final damageEvent = RoadDamageEvent(
+        latitude: position.latitude,
+        longitude: position.longitude,
+        severity: result.severity,
+        isDamaged: result.isDamaged,
+        timestamp: DateTime.now(),
+        featureType: result.featureType,
+      );
+
+      // Add to list and notify listeners
+      _events.add(damageEvent);
+      _saveEvents();
+      notifyListeners();
     }
   }
 
-  // Add listener for road damage events
-  void addListener(Function(RoadDamageEvent) listener) {
-    _listeners.add(listener);
+  // Add training example
+  Future<void> addTrainingExample(RoadFeatureType featureType) async {
+    if (_currentLocation == null) return;
+
+    final position = LatLng(
+      _currentLocation!.latitude!,
+      _currentLocation!.longitude!,
+    );
+
+    await _aiService.addTrainingExample(featureType, position);
   }
 
-  // Remove listener
-  void removeListener(Function(RoadDamageEvent) listener) {
-    _listeners.remove(listener);
-  }
-
-  // Get all road data
-  List<RoadDamageEvent> getRoadData() {
-    return _roadData;
-  }
-
-  // Clear all saved data
+  // Clear all data
   Future<void> clearData() async {
-    _roadData.clear();
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.remove('road_damage_data');
+    _events = [];
+    await _saveEvents();
+    notifyListeners();
   }
-}
 
-// Road damage event model
-class RoadDamageEvent {
-  final double latitude;
-  final double longitude;
-  final double severity;
-  final int timestamp;
-  final bool isDamaged;
+  // Update damage threshold
+  Future<void> updateThreshold(double threshold) async {
+    _damageThreshold = threshold;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setDouble('damage_threshold', threshold);
+    notifyListeners();
+  }
 
-  RoadDamageEvent({
-    required this.latitude,
-    required this.longitude,
-    required this.severity,
-    required this.timestamp,
-    required this.isDamaged,
-  });
+  // Toggle AI mode
+  Future<void> toggleAIMode(bool enabled) async {
+    _isAIEnabled = enabled;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool('ai_enabled', enabled);
+    notifyListeners();
+  }
+
+  // Toggle training mode
+  void toggleTrainingMode(bool enabled) {
+    _isTrainingMode = enabled;
+    notifyListeners();
+  }
+
+  // Get all road damage events
+  List<RoadDamageEvent> getRoadData() {
+    return List.unmodifiable(_events);
+  }
+
+  // Get damage threshold
+  double get damageThreshold => _damageThreshold;
+
+  // Get AI mode status
+  bool get isAIEnabled => _isAIEnabled;
+
+  // Get training mode status
+  bool get isTrainingMode => _isTrainingMode;
+
+  // Get monitoring status
+  bool get isMonitoring => _isMonitoring;
+
+  // Get AI training data count
+  int get trainingExampleCount => _aiService.trainingExampleCount;
+
+  // Helper function to generate square root
+  double sqrt(double value) {
+    return value <= 0 ? 0 : math.sqrt(value);
+  }
+
+  @override
+  void dispose() {
+    stopMonitoring();
+    super.dispose();
+  }
 }
