@@ -1,13 +1,13 @@
 {
   "project_info": {
-    "project_number": "193344762468",
-    "project_id": "device-streaming-4a255043",
-    "storage_bucket": "device-streaming-4a255043.firebasestorage.app"
+    "project_number": "381372567910",
+    "project_id": "my-road-damage-project",
+    "storage_bucket": "my-road-damage-project.firebasestorage.app"
   },
   "client": [
     {
       "client_info": {
-        "mobilesdk_app_id": "1:193344762468:android:a983b592b0defbe9562571",
+        "mobilesdk_app_id": "1:381372567910:android:2d4cffb746fb501b3538a7",
         "android_client_info": {
           "package_name": "com.example.road_damage_haha"
         }
@@ -15,7 +15,7 @@
       "oauth_client": [],
       "api_key": [
         {
-          "current_key": "AIzaSyB0iPDnXeYz-OWsp9pkJxcA9tclm4FYjnA"
+          "current_key": "AIzaSyBoGfKEztdhiAk5OkUIPsYn3YTKzjrpIdw"
         }
       ],
       "services": {

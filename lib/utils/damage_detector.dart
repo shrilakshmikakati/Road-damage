@@ -1,14 +1,43 @@
 // lib/utils/damage_detector.dart
 import 'dart:async';
 import 'dart:convert';
+import 'dart:math' as math; // Add this missing import
 import 'package:flutter/foundation.dart';
 import 'package:sensors_plus/sensors_plus.dart';
 import 'package:location/location.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:uuid/uuid.dart';
-import '../models/damage_record.dart';
 import '../services/damage_ai_service.dart';
+
+// Enum for road feature types if not defined in damage_record.dart
+enum RoadFeatureType {
+  smooth,
+  pothole,
+  bump,
+  crack,
+  roughPatch,
+}
+
+// Define MotionData class if not available in damage_ai_service.dart
+class MotionData {
+  final double accelerationX;
+  final double accelerationY;
+  final double accelerationZ;
+  final double gyroX;
+  final double gyroY;
+  final double gyroZ;
+  final DateTime timestamp;
+
+  MotionData({
+    required this.accelerationX,
+    required this.accelerationY,
+    required this.accelerationZ,
+    required this.gyroX,
+    required this.gyroY,
+    required this.gyroZ,
+    required this.timestamp,
+  });
+}
 
 class RoadDamageEvent {
   final double latitude;
@@ -67,7 +96,7 @@ class DamageDetector extends ChangeNotifier {
   List<RoadDamageEvent> _events = [];
 
   // Streaming subscriptions
-  StreamSubscription<AccelerometerEvent>? _accelerometerSubscription;
+  StreamSubscription<UserAccelerometerEvent>? _accelerometerSubscription;
   StreamSubscription<GyroscopeEvent>? _gyroscopeSubscription;
   StreamSubscription<LocationData>? _locationSubscription;
 
@@ -160,22 +189,39 @@ class DamageDetector extends ChangeNotifier {
   }
 
   // Start monitoring for road damage
-  void startMonitoring() {
+  Future<void> startMonitoring() async {
     if (_isMonitoring) return;
+
+    // Ensure initialized
+    if (!_isInitialized) {
+      await initialize();
+    }
 
     // Subscribe to sensor events
     const samplingPeriod = Duration(milliseconds: 200); // 5 Hz sampling
 
     _accelerometerSubscription = userAccelerometerEvents.listen(
-          (AccelerometerEvent event) {
+          (UserAccelerometerEvent event) {
         _processAccelerometerData(event);
       },
+      onError: (error) {
+        if (kDebugMode) {
+          print('Error from accelerometer: $error');
+        }
+      },
+      cancelOnError: false,
     );
 
     _gyroscopeSubscription = gyroscopeEvents.listen(
           (GyroscopeEvent event) {
         _processGyroscopeData(event);
       },
+      onError: (error) {
+        if (kDebugMode) {
+          print('Error from gyroscope: $error');
+        }
+      },
+      cancelOnError: false,
     );
 
     // Subscribe to location updates
@@ -183,6 +229,12 @@ class DamageDetector extends ChangeNotifier {
           (LocationData location) {
         _currentLocation = location;
       },
+      onError: (error) {
+        if (kDebugMode) {
+          print('Error from location service: $error');
+        }
+      },
+      cancelOnError: false,
     );
 
     _isMonitoring = true;
@@ -206,7 +258,7 @@ class DamageDetector extends ChangeNotifier {
   }
 
   // Process accelerometer data
-  void _processAccelerometerData(AccelerometerEvent event) {
+  void _processAccelerometerData(UserAccelerometerEvent event) {
     if (_currentLocation == null) return;
 
     // Add data to AI service
@@ -232,12 +284,24 @@ class DamageDetector extends ChangeNotifier {
 
   // Process gyroscope data
   void _processGyroscopeData(GyroscopeEvent event) {
-    // The gyroscope data is used by the AI service
-    // It doesn't directly trigger damage detection
+    // Update the AI service with the latest gyroscope data
+    if (_currentLocation != null) {
+      final motionData = MotionData(
+        accelerationX: 0, // These will come from accelerometer events
+        accelerationY: 0,
+        accelerationZ: 0,
+        gyroX: event.x,
+        gyroY: event.y,
+        gyroZ: event.z,
+        timestamp: DateTime.now(),
+      );
+
+      _aiService.updateGyroscopeData(motionData);
+    }
   }
 
   // Analyze with simple threshold (legacy method)
-  void _analyzeWithSimpleThreshold(AccelerometerEvent event) {
+  void _analyzeWithSimpleThreshold(UserAccelerometerEvent event) {
     if (_currentLocation == null) return;
 
     // Calculate magnitude of acceleration
