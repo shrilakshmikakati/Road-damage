@@ -6,6 +6,9 @@ import '../utils/damage_detector.dart';
 import '../repositories/damage_repository.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:package_info_plus/package_info_plus.dart';
+import 'package:location/location.dart';
+import '../services/location_service.dart';
+import '../services/damage_ai_service.dart'; // Correct import path
 
 class SettingsScreen extends StatefulWidget {
   const SettingsScreen({Key? key}) : super(key: key);
@@ -14,9 +17,11 @@ class SettingsScreen extends StatefulWidget {
   @override
   _SettingsScreenState createState() => _SettingsScreenState();
 }
-
 class _SettingsScreenState extends State<SettingsScreen> {
-  final DamageDetector _damageDetector = DamageDetector();
+  final DamageDetector _damageDetector = DamageDetector(
+    aiService: DamageAIService(),
+    locationService: LocationServiceImpl(),
+  );
   final DamageRepository _repository = DamageRepository();
   bool _isSyncing = false;
   String _syncStatus = '';

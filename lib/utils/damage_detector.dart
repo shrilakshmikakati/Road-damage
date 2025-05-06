@@ -1,24 +1,40 @@
 // lib/utils/damage_detector.dart
 import 'dart:async';
 import 'dart:convert';
-import 'dart:math' as math; // Add this missing import
+import 'dart:math' as math;
 import 'package:flutter/foundation.dart';
-import 'package:sensors_plus/sensors_plus.dart';
-import 'package:location/location.dart';
-import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import '../services/damage_ai_service.dart';
+import 'package:google_maps_flutter/google_maps_flutter.dart';
+import '../models/road_feature_type.dart';
+import '../models/custom_location_data.dart';
+import '../services/damage_ai_service.dart'; // Added for AIService
 
-// Enum for road feature types if not defined in damage_record.dart
-enum RoadFeatureType {
-  smooth,
-  pothole,
-  bump,
-  crack,
-  roughPatch,
+
+// RoadFeatureEvent class
+class RoadFeatureEvent {
+  final RoadFeatureType type;
+  final double latitude;
+  final double longitude;
+  final int timestamp;
+
+  RoadFeatureEvent({
+    required this.type,
+    required this.latitude,
+    required this.longitude,
+    required this.timestamp,
+  });
+
+  Map<String, dynamic> toJson() {
+    return {
+      'type': type.toString().split('.').last,
+      'latitude': latitude,
+      'longitude': longitude,
+      'timestamp': timestamp,
+    };
+  }
 }
 
-// Define MotionData class if not available in damage_ai_service.dart
+// Motion data class for sensor readings
 class MotionData {
   final double accelerationX;
   final double accelerationY;
@@ -37,399 +53,943 @@ class MotionData {
     required this.gyroZ,
     required this.timestamp,
   });
+
+  // Calculate the magnitude of acceleration
+  double get accelerationMagnitude {
+    return math.sqrt(
+        math.pow(accelerationX, 2) +
+            math.pow(accelerationY, 2) +
+            math.pow(accelerationZ, 2)
+    );
+  }
+
+  // Calculate the magnitude of gyroscope reading
+  double get gyroscopeMagnitude {
+    return math.sqrt(
+        math.pow(gyroX, 2) +
+            math.pow(gyroY, 2) +
+            math.pow(gyroZ, 2)
+    );
+  }
+
+  Map<String, dynamic> toJson() {
+    return {
+      'accelerationX': accelerationX,
+      'accelerationY': accelerationY,
+      'accelerationZ': accelerationZ,
+      'gyroX': gyroX,
+      'gyroY': gyroY,
+      'gyroZ': gyroZ,
+      'timestamp': timestamp.millisecondsSinceEpoch,
+    };
+  }
+
+  factory MotionData.fromJson(Map<String, dynamic> json) {
+    return MotionData(
+      accelerationX: json['accelerationX'],
+      accelerationY: json['accelerationY'],
+      accelerationZ: json['accelerationZ'],
+      gyroX: json['gyroX'],
+      gyroY: json['gyroY'],
+      gyroZ: json['gyroZ'],
+      timestamp: DateTime.fromMillisecondsSinceEpoch(json['timestamp']),
+    );
+  }
 }
 
-class RoadDamageEvent {
-  final double latitude;
-  final double longitude;
-  final double severity;
-  final bool isDamaged;
-  final DateTime timestamp;
+// Training example class for ML model
+class TrainingExample {
+  final List<MotionData> motionSequence;
   final RoadFeatureType featureType;
+  final LatLng location;
 
-  RoadDamageEvent({
-    required this.latitude,
-    required this.longitude,
-    required this.severity,
-    required this.isDamaged,
-    required this.timestamp,
+  TrainingExample({
+    required this.motionSequence,
     required this.featureType,
+    required this.location,
   });
 
   Map<String, dynamic> toJson() {
     return {
-      'latitude': latitude,
-      'longitude': longitude,
-      'severity': severity,
-      'isDamaged': isDamaged,
-      'timestamp': timestamp.millisecondsSinceEpoch,
-      'featureType': featureType.toString(),
+      'motionSequence': motionSequence.map((e) => e.toJson()).toList(),
+      'featureType': featureType.toString().split('.').last,
+      'lat': location.latitude,
+      'lng': location.longitude,
     };
   }
 
-  factory RoadDamageEvent.fromJson(Map<String, dynamic> json) {
-    return RoadDamageEvent(
-      latitude: json['latitude'],
-      longitude: json['longitude'],
-      severity: json['severity'],
-      isDamaged: json['isDamaged'],
-      timestamp: DateTime.fromMillisecondsSinceEpoch(json['timestamp']),
-      featureType: RoadFeatureType.values.firstWhere(
-            (e) => e.toString() == json['featureType'],
-        orElse: () => RoadFeatureType.smooth,
-      ),
+  factory TrainingExample.fromJson(Map<String, dynamic> json) {
+    List<dynamic> motionList = json['motionSequence'];
+    return TrainingExample(
+      motionSequence: motionList.map((e) => MotionData.fromJson(e)).toList(),
+      featureType: RoadFeatureTypeExtension.fromString(json['featureType']),
+      location: LatLng(json['lat'], json['lng']),
     );
+  }
+
+  // Extract features from this training example
+  List<double> extractFeatures() {
+    if (motionSequence.isEmpty) return List.filled(10, 0.0);
+
+    // Calculate features
+    double avgAccel = _calculateAverage(
+        motionSequence.map((m) => m.accelerationMagnitude).toList()
+    );
+    double peakAccel = _calculatePeak(
+        motionSequence.map((m) => m.accelerationMagnitude).toList()
+    );
+    double avgGyro = _calculateAverage(
+        motionSequence.map((m) => m.gyroscopeMagnitude).toList()
+    );
+    double peakGyro = _calculatePeak(
+        motionSequence.map((m) => m.gyroscopeMagnitude).toList()
+    );
+    double symmetry = _calculateSymmetry(
+        motionSequence.map((m) => m.accelerationMagnitude).toList()
+    );
+    int durationMs = motionSequence.last.timestamp
+        .difference(motionSequence.first.timestamp).inMilliseconds;
+    double durationSec = durationMs / 1000.0;
+
+    // Return feature vector
+    return [
+      avgAccel,
+      peakAccel,
+      avgGyro,
+      peakGyro,
+      symmetry,
+      durationSec,
+      peakAccel / avgAccel, // peak-to-average ratio
+      avgGyro / avgAccel,   // gyro-to-accel ratio
+      durationSec * avgAccel, // energy proxy
+      motionSequence.length.toDouble() // sample count
+    ];
+  }
+
+  // Helper methods for feature extraction
+  double _calculateAverage(List<double> values) {
+    if (values.isEmpty) return 0.0;
+    return values.reduce((a, b) => a + b) / values.length;
+  }
+
+  double _calculatePeak(List<double> values) {
+    if (values.isEmpty) return 0.0;
+    return values.reduce(math.max);
+  }
+
+  double _calculateSymmetry(List<double> signal) {
+    if (signal.length < 2) return 1.0;
+
+    int midpoint = signal.length ~/ 2;
+    int compareLength = math.min(midpoint, signal.length - midpoint);
+
+    double totalDiff = 0;
+    double maxPossibleDiff = 0;
+
+    for (int i = 0; i < compareLength; i++) {
+      double left = signal[midpoint - i - 1];
+      double right = signal[midpoint + i];
+      totalDiff += (left - right).abs();
+      maxPossibleDiff += math.max(left, right);
+    }
+
+    if (maxPossibleDiff == 0) return 1.0;
+    return 1.0 - (totalDiff / maxPossibleDiff);
   }
 }
 
-class DamageDetector extends ChangeNotifier {
-  static const String _storageKey = 'road_damage_events';
+// Classification result
+class ClassificationResult {
+  final RoadFeatureType featureType;
+  final double confidence;
+  final double severity;
+  final bool isDamaged;
+  final Map<RoadFeatureType, double> probabilities;
 
-  // Location service
-  final Location _locationService = Location();
-  LocationData? _currentLocation;
+  ClassificationResult({
+    required this.featureType,
+    required this.confidence,
+    required this.severity,
+    required this.probabilities,
+    this.isDamaged = true,
+  });
+}
 
-  // AI service
-  final DamageAIService _aiService = DamageAIService();
+// Feature extractor interface
+abstract class FeatureExtractor {
+  List<double> extractFeatures(List<MotionData> motionData);
+}
 
-  // List of detected road damage events
-  List<RoadDamageEvent> _events = [];
+// Simple feature extractor implementation
+class SimpleFeatureExtractor implements FeatureExtractor {
+  @override
+  List<double> extractFeatures(List<MotionData> motionData) {
+    if (motionData.isEmpty) return List.filled(10, 0.0);
 
-  // Streaming subscriptions
-  StreamSubscription<UserAccelerometerEvent>? _accelerometerSubscription;
-  StreamSubscription<GyroscopeEvent>? _gyroscopeSubscription;
-  StreamSubscription<LocationData>? _locationSubscription;
+    // Calculate average and peak magnitudes
+    double avgAccel = 0;
+    double maxAccel = 0;
+    double avgGyro = 0;
+    double maxGyro = 0;
 
-  // Tracking state
-  bool _isMonitoring = false;
-  bool _isInitialized = false;
+    for (var motion in motionData) {
+      double accelMag = motion.accelerationMagnitude;
+      double gyroMag = motion.gyroscopeMagnitude;
 
-  // Settings
-  double _damageThreshold = 2.0; // Default threshold
+      avgAccel += accelMag;
+      avgGyro += gyroMag;
 
-  // AI mode
-  bool _isAIEnabled = true;
+      if (accelMag > maxAccel) maxAccel = accelMag;
+      if (gyroMag > maxGyro) maxGyro = gyroMag;
+    }
 
-  // Training mode
-  bool _isTrainingMode = false;
+    avgAccel /= motionData.length;
+    avgGyro /= motionData.length;
 
-  // Initialize the detector
-  Future<void> initialize() async {
-    if (_isInitialized) return;
+    // Calculate pattern features
+    int durationMs = motionData.last.timestamp
+        .difference(motionData.first.timestamp).inMilliseconds;
+    double durationSec = durationMs / 1000.0;
 
-    // Load settings
-    final prefs = await SharedPreferences.getInstance();
-    _damageThreshold = prefs.getDouble('damage_threshold') ?? 2.0;
-    _isAIEnabled = prefs.getBool('ai_enabled') ?? true;
+    // Calculate symmetry
+    List<double> accelProfile = motionData.map((m) => m.accelerationMagnitude).toList();
+    double symmetry = _calculateSymmetry(accelProfile);
 
-    // Initialize location service
-    await _locationService.changeSettings(
-      accuracy: LocationAccuracy.high,
-      interval: 1000,
-      distanceFilter: 5,
-    );
+    // Return feature vector
+    return [
+      avgAccel,
+      maxAccel,
+      avgGyro,
+      maxGyro,
+      symmetry,
+      durationSec,
+      maxAccel / (avgAccel > 0 ? avgAccel : 1.0), // peak-to-average ratio
+      avgGyro / (avgAccel > 0 ? avgAccel : 1.0),  // gyro-to-accel ratio
+      durationSec * avgAccel, // energy proxy
+      motionData.length.toDouble() // sample count
+    ];
+  }
 
-    // Request permission
-    bool serviceEnabled = await _locationService.serviceEnabled();
-    if (!serviceEnabled) {
-      serviceEnabled = await _locationService.requestService();
-      if (!serviceEnabled) {
-        return;
+  // Calculate symmetry of signal (0 = asymmetric, 1 = symmetric)
+  double _calculateSymmetry(List<double> signal) {
+    if (signal.length < 2) return 1.0;
+
+    int midpoint = signal.length ~/ 2;
+    int compareLength = math.min(midpoint, signal.length - midpoint);
+
+    double totalDiff = 0;
+    double maxPossibleDiff = 0;
+
+    for (int i = 0; i < compareLength; i++) {
+      double left = signal[midpoint - i - 1];
+      double right = signal[midpoint + i];
+      totalDiff += (left - right).abs();
+      maxPossibleDiff += math.max(left, right);
+    }
+
+    if (maxPossibleDiff == 0) return 1.0;
+    return 1.0 - (totalDiff / maxPossibleDiff);
+  }
+}
+
+// Classifier interface
+abstract class Classifier {
+  Future<ClassificationResult> classify(List<double> features);
+  Future<void> train(List<TrainingExample> examples);
+}
+
+// Threshold-based classifier implementation
+class ThresholdClassifier implements Classifier {
+  // Thresholds for different types of road features
+  Map<RoadFeatureType, double> _thresholds = {
+    RoadFeatureType.pothole: 2.0,
+    RoadFeatureType.speedBreaker: 1.5,
+    RoadFeatureType.railwayCrossing: 1.8,
+    RoadFeatureType.roughPatch: 1.2,
+    RoadFeatureType.smooth: 0.0,
+  };
+
+  // Classification weights for each feature
+
+
+  @override
+  Future<ClassificationResult> classify(List<double> features) async {
+    if (features.isEmpty || features.length < 10) {
+      return ClassificationResult(
+        featureType: RoadFeatureType.smooth,
+        confidence: 0.0,
+        severity: 0.0,
+        isDamaged: false,
+        probabilities: {
+          for (var type in RoadFeatureType.values) type: type == RoadFeatureType.smooth ? 1.0 : 0.0
+        },
+      );
+    }
+
+    // Weighted score for acceleration magnitude (most important feature)
+    double severity = features[1]; // Using peak acceleration as severity
+
+    // Calculate scores for each road feature type
+    Map<RoadFeatureType, double> scores = {};
+
+    // Pothole scoring (high peak accel, low symmetry, short duration)
+    scores[RoadFeatureType.pothole] =
+        features[1] * 0.5 + // peak accel
+            (1.0 - features[4]) * 0.3 + // asymmetry (1 - symmetry)
+            (1.0 - math.min(features[5] / 0.5, 1.0)) * 0.2; // short duration
+
+    // Speed breaker scoring (high avg accel, high symmetry, medium duration)
+    scores[RoadFeatureType.speedBreaker] =
+        features[0] * 0.4 + // avg accel
+            features[4] * 0.4 + // symmetry
+            math.min(features[5] / 1.0, 1.0) * 0.2; // medium duration
+
+    // Railway crossing scoring (medium peak, high duration, medium symmetry)
+    scores[RoadFeatureType.railwayCrossing] =
+        features[1] * 0.3 + // peak accel
+            math.min(features[5] / 1.5, 1.0) * 0.5 + // longer duration
+            features[4] * 0.2; // symmetry
+
+    // Rough patch scoring (low peak, long duration, low symmetry)
+    scores[RoadFeatureType.roughPatch] =
+        math.min(features[0] / 1.0, 1.0) * 0.3 + // moderate avg accel
+            math.min(features[5] / 2.0, 1.0) * 0.5 + // long duration
+            (1.0 - features[4]) * 0.2; // asymmetry
+
+    // Smooth road scoring (low everything)
+    scores[RoadFeatureType.smooth] =
+        (1.0 - math.min(features[0] / 0.5, 1.0)) * 0.5 + // low avg accel
+            (1.0 - math.min(features[1] / 1.0, 1.0)) * 0.5; // low peak accel
+
+    // Normalize scores to sum to 1.0 (probabilities)
+    double totalScore = scores.values.reduce((a, b) => a + b);
+    Map<RoadFeatureType, double> probabilities = {};
+
+    if (totalScore > 0) {
+      for (var type in RoadFeatureType.values) {
+        probabilities[type] = scores[type]! / totalScore;
       }
-    }
-
-    var permissionStatus = await _locationService.hasPermission();
-    if (permissionStatus == PermissionStatus.denied) {
-      permissionStatus = await _locationService.requestPermission();
-      if (permissionStatus != PermissionStatus.granted) {
-        return;
-      }
-    }
-
-    // Initialize AI service
-    await _aiService.initialize();
-
-    // Load saved events
-    await _loadEvents();
-
-    _isInitialized = true;
-  }
-
-  // Load saved events
-  Future<void> _loadEvents() async {
-    try {
-      final prefs = await SharedPreferences.getInstance();
-      final jsonList = prefs.getStringList(_storageKey) ?? [];
-
-      _events = jsonList.map((str) =>
-          RoadDamageEvent.fromJson(jsonDecode(str))
-      ).toList();
-    } catch (e) {
-      if (kDebugMode) {
-        print('Error loading road damage events: $e');
-      }
-      _events = [];
-    }
-  }
-
-  // Save events
-  Future<void> _saveEvents() async {
-    try {
-      final prefs = await SharedPreferences.getInstance();
-      final jsonList = _events.map((event) =>
-          jsonEncode(event.toJson())
-      ).toList();
-
-      await prefs.setStringList(_storageKey, jsonList);
-    } catch (e) {
-      if (kDebugMode) {
-        print('Error saving road damage events: $e');
-      }
-    }
-  }
-
-  // Start monitoring for road damage
-  Future<void> startMonitoring() async {
-    if (_isMonitoring) return;
-
-    // Ensure initialized
-    if (!_isInitialized) {
-      await initialize();
-    }
-
-    // Subscribe to sensor events
-    const samplingPeriod = Duration(milliseconds: 200); // 5 Hz sampling
-
-    _accelerometerSubscription = userAccelerometerEvents.listen(
-          (UserAccelerometerEvent event) {
-        _processAccelerometerData(event);
-      },
-      onError: (error) {
-        if (kDebugMode) {
-          print('Error from accelerometer: $error');
-        }
-      },
-      cancelOnError: false,
-    );
-
-    _gyroscopeSubscription = gyroscopeEvents.listen(
-          (GyroscopeEvent event) {
-        _processGyroscopeData(event);
-      },
-      onError: (error) {
-        if (kDebugMode) {
-          print('Error from gyroscope: $error');
-        }
-      },
-      cancelOnError: false,
-    );
-
-    // Subscribe to location updates
-    _locationSubscription = _locationService.onLocationChanged.listen(
-          (LocationData location) {
-        _currentLocation = location;
-      },
-      onError: (error) {
-        if (kDebugMode) {
-          print('Error from location service: $error');
-        }
-      },
-      cancelOnError: false,
-    );
-
-    _isMonitoring = true;
-    notifyListeners();
-  }
-
-  // Stop monitoring
-  void stopMonitoring() {
-    if (!_isMonitoring) return;
-
-    _accelerometerSubscription?.cancel();
-    _gyroscopeSubscription?.cancel();
-    _locationSubscription?.cancel();
-
-    _accelerometerSubscription = null;
-    _gyroscopeSubscription = null;
-    _locationSubscription = null;
-
-    _isMonitoring = false;
-    notifyListeners();
-  }
-
-  // Process accelerometer data
-  void _processAccelerometerData(UserAccelerometerEvent event) {
-    if (_currentLocation == null) return;
-
-    // Add data to AI service
-    final motionData = MotionData(
-      accelerationX: event.x,
-      accelerationY: event.y,
-      accelerationZ: event.z,
-      gyroX: 0, // Will be updated from gyroscope event
-      gyroY: 0,
-      gyroZ: 0,
-      timestamp: DateTime.now(),
-    );
-
-    _aiService.addMotionData(motionData);
-
-    // Analyze data
-    if (_isAIEnabled) {
-      _analyzeWithAI();
     } else {
-      _analyzeWithSimpleThreshold(event);
+      // Default to smooth if all scores are 0
+      for (var type in RoadFeatureType.values) {
+        probabilities[type] = type == RoadFeatureType.smooth ? 1.0 : 0.0;
+      }
     }
-  }
 
-  // Process gyroscope data
-  void _processGyroscopeData(GyroscopeEvent event) {
-    // Update the AI service with the latest gyroscope data
-    if (_currentLocation != null) {
-      final motionData = MotionData(
-        accelerationX: 0, // These will come from accelerometer events
-        accelerationY: 0,
-        accelerationZ: 0,
-        gyroX: event.x,
-        gyroY: event.y,
-        gyroZ: event.z,
-        timestamp: DateTime.now(),
-      );
+    // Find the highest scoring feature type
+    RoadFeatureType bestType = RoadFeatureType.smooth;
+    double bestScore = 0.0;
 
-      _aiService.updateGyroscopeData(motionData);
+    for (var entry in scores.entries) {
+      if (entry.value > bestScore) {
+        bestScore = entry.value;
+        bestType = entry.key;
+      }
     }
-  }
 
-  // Analyze with simple threshold (legacy method)
-  void _analyzeWithSimpleThreshold(UserAccelerometerEvent event) {
-    if (_currentLocation == null) return;
+    // Calculate confidence (normalized score)
+    double confidence = probabilities[bestType] ?? 0.0;
 
-    // Calculate magnitude of acceleration
-    double magnitude = sqrt(event.x * event.x + event.y * event.y + event.z * event.z);
+    // Determine if it's damaged (any non-smooth feature type)
+    bool isDamaged = bestType != RoadFeatureType.smooth;
 
-    // Check if magnitude exceeds threshold
-    if (magnitude > _damageThreshold) {
-      // Create damage event
-      final damageEvent = RoadDamageEvent(
-        latitude: _currentLocation!.latitude!,
-        longitude: _currentLocation!.longitude!,
-        severity: magnitude,
-        isDamaged: true,
-        timestamp: DateTime.now(),
-        featureType: RoadFeatureType.pothole, // Default classification
-      );
-
-      // Add to list and notify listeners
-      _events.add(damageEvent);
-      _saveEvents();
-      notifyListeners();
-    }
-  }
-
-  // Analyze with AI
-  void _analyzeWithAI() {
-    if (_currentLocation == null) return;
-
-    // Get current position
-    final position = LatLng(
-      _currentLocation!.latitude!,
-      _currentLocation!.longitude!,
+    return ClassificationResult(
+      featureType: bestType,
+      confidence: confidence,
+      severity: severity,
+      isDamaged: isDamaged,
+      probabilities: probabilities,
     );
-
-    // Analyze current buffer
-    final result = _aiService.analyzeCurrentBuffer(position);
-
-    // Check if it's a significant road feature
-    if (result.featureType != RoadFeatureType.smooth || result.severity > _damageThreshold) {
-      // If in training mode, don't add to events
-      if (_isTrainingMode) return;
-
-      // Create damage event
-      final damageEvent = RoadDamageEvent(
-        latitude: position.latitude,
-        longitude: position.longitude,
-        severity: result.severity,
-        isDamaged: result.isDamaged,
-        timestamp: DateTime.now(),
-        featureType: result.featureType,
-      );
-
-      // Add to list and notify listeners
-      _events.add(damageEvent);
-      _saveEvents();
-      notifyListeners();
-    }
-  }
-
-  // Add training example
-  Future<void> addTrainingExample(RoadFeatureType featureType) async {
-    if (_currentLocation == null) return;
-
-    final position = LatLng(
-      _currentLocation!.latitude!,
-      _currentLocation!.longitude!,
-    );
-
-    await _aiService.addTrainingExample(featureType, position);
-  }
-
-  // Clear all data
-  Future<void> clearData() async {
-    _events = [];
-    await _saveEvents();
-    notifyListeners();
-  }
-
-  // Update damage threshold
-  Future<void> updateThreshold(double threshold) async {
-    _damageThreshold = threshold;
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setDouble('damage_threshold', threshold);
-    notifyListeners();
-  }
-
-  // Toggle AI mode
-  Future<void> toggleAIMode(bool enabled) async {
-    _isAIEnabled = enabled;
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setBool('ai_enabled', enabled);
-    notifyListeners();
-  }
-
-  // Toggle training mode
-  void toggleTrainingMode(bool enabled) {
-    _isTrainingMode = enabled;
-    notifyListeners();
-  }
-
-  // Get all road damage events
-  List<RoadDamageEvent> getRoadData() {
-    return List.unmodifiable(_events);
-  }
-
-  // Get damage threshold
-  double get damageThreshold => _damageThreshold;
-
-  // Get AI mode status
-  bool get isAIEnabled => _isAIEnabled;
-
-  // Get training mode status
-  bool get isTrainingMode => _isTrainingMode;
-
-  // Get monitoring status
-  bool get isMonitoring => _isMonitoring;
-
-  // Get AI training data count
-  int get trainingExampleCount => _aiService.trainingExampleCount;
-
-  // Helper function to generate square root
-  double sqrt(double value) {
-    return value <= 0 ? 0 : math.sqrt(value);
   }
 
   @override
+  Future<void> train(List<TrainingExample> examples) async {
+    if (examples.isEmpty) return;
+
+    // Group examples by feature type
+    Map<RoadFeatureType, List<List<double>>> featuresByType = {};
+
+    for (var type in RoadFeatureType.values) {
+      featuresByType[type] = [];
+    }
+
+    // Extract features for each example
+    for (var example in examples) {
+      List<double> features = example.extractFeatures();
+      featuresByType[example.featureType]!.add(features);
+    }
+
+    // Update thresholds based on average peak acceleration (feature index 1)
+    for (var type in RoadFeatureType.values) {
+      if (type == RoadFeatureType.smooth || featuresByType[type]!.isEmpty) continue;
+
+      // Calculate average peak acceleration for this type
+      double sum = 0.0;
+      for (var features in featuresByType[type]!) {
+        sum += features[1]; // peak acceleration
+      }
+      double avg = sum / featuresByType[type]!.length;
+
+      // Update threshold with some margin
+      _thresholds[type] = avg * 0.9; // 90% of average peak
+    }
+  }
+}
+
+// Service interfaces
+
+
+abstract class LocationService {
+  Future<CustomLocationData> getLocation();
+}
+
+// And all methods that use LocationData should use CustomLocationData instead:
+CustomLocationData? _currentLocation;
+
+void setCurrentLocation(CustomLocationData location) {
+  _currentLocation = location;
+}
+
+// Type for the event callback
+typedef RoadFeatureEventCallback = void Function(RoadFeatureEvent event);
+
+// Main DamageDetector class
+class DamageDetector extends ChangeNotifier {
+  // Service dependencies
+  final AIService _aiService;
+  final LocationService _locationService;
+
+  MotionData? _latestAccelData;
+  MotionData? _latestGyroData;
+  final List<MotionData> _currentMotionBuffer = [];
+  final int _bufferSize = 100;
+  int _minEventSamplesRequired = 10;
+  double _eventThreshold = 10.0;
+  final int _eventTimeoutMs = 2000;
+  final int _maxRecentDetections = 50;
+  bool _isEventInProgress = false;
+  DateTime? _eventStartTime;
+  Timer? _eventTimeout;
+  final List<ClassificationResult> _recentDetections = [];
+  final List<TrainingExample> _trainingData = [];
+  final _trainingDataKey = 'training_data_key';
+  final FeatureExtractor _featureExtractor = SimpleFeatureExtractor();
+  final Classifier _classifier = ThresholdClassifier();
+  bool _useAI = true;
+  bool _isDetecting = false;
+  bool _isAIEnabled = true;
+  bool _isMonitoring = false;
+  List<Function(RoadFeatureEvent)> _roadFeatureEventListeners = [];
+  CustomLocationData? _currentLocation;
+
+  // Constructor with required services
+  DamageDetector({
+    required AIService aiService,
+    required LocationService locationService,
+  }) : _aiService = aiService,
+        _locationService = locationService;
+
+  // Getters
+  int get trainingExampleCount => _trainingData.length;
+  List<ClassificationResult> get recentDetections => List.unmodifiable(_recentDetections);
+  List<TrainingExample> get trainingData => List.unmodifiable(_trainingData);
+  bool get isEventInProgress => _isEventInProgress;
+  DateTime? get eventStartTime => _eventStartTime;
+  bool get isAIEnabled => _isAIEnabled;
+  bool get isMonitoring => _isMonitoring;
+
+  Future<void> initialize() async {
+    await _loadTrainingData();
+  }
+
+  // Start detection method
+  void startDetection() {
+    _isDetecting = true;
+    debugPrint('Road damage detection started');
+    notifyListeners();
+  }
+
+  // Stop detection method
+  void stopDetection() {
+    _isDetecting = false;
+    debugPrint('Road damage detection stopped');
+    notifyListeners();
+  }
+
+  // Start monitoring method
+  void startMonitoring() {
+    _isMonitoring = true;
+    debugPrint('Motion monitoring started');
+    notifyListeners();
+  }
+
+  // Stop monitoring method
+  void stopMonitoring() {
+    _isMonitoring = false;
+    debugPrint('Motion monitoring stopped');
+    notifyListeners();
+  }
+
+  // Method to set AI mode
+  void setAIMode(bool enabled) {
+    _isAIEnabled = enabled;
+    debugPrint('AI mode set to: $enabled');
+    notifyListeners();
+  }
+
+  // Set current location method
+  void setCurrentLocation(CustomLocationData location) {
+    _currentLocation = location;
+  }
+
+  // Add road feature event listener method
+  void addRoadFeatureEventListener(Function(RoadFeatureEvent) listener) {
+    _roadFeatureEventListeners.add(listener);
+  }
+
+  // Remove specific road feature event listener
+  void removeRoadFeatureEventListener(Function(RoadFeatureEvent) listener) {
+    _roadFeatureEventListeners.remove(listener);
+  }
+
+  // Method to notify listeners about road damage events
+  void _notifyRoadDamageEvent(RoadFeatureEvent event) {
+    for (var listener in _roadFeatureEventListeners) {
+      listener(event);
+    }
+  }
+
+  void updateAccelerometerData(MotionData data) {
+    _latestAccelData = data;
+
+    if (_latestGyroData != null) {
+      final combinedData = MotionData(
+        accelerationX: data.accelerationX,
+        accelerationY: data.accelerationY,
+        accelerationZ: data.accelerationZ,
+        gyroX: _latestGyroData!.gyroX,
+        gyroY: _latestGyroData!.gyroY,
+        gyroZ: _latestGyroData!.gyroZ,
+        timestamp: data.timestamp,
+      );
+      _processMotionData(combinedData);
+    }
+  }
+
+  void updateGyroscopeData(MotionData data) {
+    _latestGyroData = data;
+
+    if (_latestAccelData != null) {
+      final combinedData = MotionData(
+        accelerationX: _latestAccelData!.accelerationX,
+        accelerationY: _latestAccelData!.accelerationY,
+        accelerationZ: _latestAccelData!.accelerationZ,
+        gyroX: data.gyroX,
+        gyroY: data.gyroY,
+        gyroZ: data.gyroZ,
+        timestamp: data.timestamp,
+      );
+      _processMotionData(combinedData);
+    }
+  }
+
+  void _processMotionData(MotionData data) {
+    _currentMotionBuffer.add(data);
+    if (_currentMotionBuffer.length > _bufferSize) {
+      _currentMotionBuffer.removeAt(0);
+    }
+
+    if (!_isEventInProgress && data.accelerationMagnitude > _eventThreshold) {
+      _startEvent();
+    }
+
+    if (_isEventInProgress) {
+      _resetEventTimeout();
+    }
+  }
+
+  void updateThreshold(double threshold) {
+    _eventThreshold = threshold;
+    notifyListeners();
+  }
+
+  void toggleAIMode(bool enabled) {
+    _useAI = enabled;
+    notifyListeners();
+  }
+
+  ClassificationResult analyzeCurrentBuffer(LatLng position) {
+    if (_currentMotionBuffer.length < _minEventSamplesRequired) {
+      return _defaultSmoothResult();
+    }
+
+    List<double> features = _featureExtractor.extractFeatures(_currentMotionBuffer);
+
+    // Synchronous return fallback
+    return _defaultSmoothResult();
+  }
+
+  Future<ClassificationResult> analyzeCurrentBufferAsync() async {
+    try {
+      if (_currentMotionBuffer.length < _minEventSamplesRequired) {
+        return _defaultSmoothResult();
+      }
+
+      List<double> features = _featureExtractor.extractFeatures(_currentMotionBuffer);
+
+      return await _classifier.classify(features).timeout(
+        Duration(milliseconds: 100),
+        onTimeout: () => _defaultSmoothResult(),
+      );
+    } catch (e) {
+      debugPrint('Error classifying road feature: $e');
+      return _defaultSmoothResult();
+    }
+  }
+
+  ClassificationResult _defaultSmoothResult() {
+    return ClassificationResult(
+      featureType: RoadFeatureType.smooth,
+      confidence: 0.0,
+      severity: 0.0,
+      isDamaged: false,
+      probabilities: {
+        for (var type in RoadFeatureType.values)
+          type: type == RoadFeatureType.smooth ? 1.0 : 0.0
+      },
+    );
+  }
+
+  void _startEvent() {
+    _isEventInProgress = true;
+    _eventStartTime = DateTime.now();
+    _resetEventTimeout();
+    notifyListeners();
+  }
+
+  void _resetEventTimeout() {
+    _eventTimeout?.cancel();
+    _eventTimeout = Timer(
+      Duration(milliseconds: _eventTimeoutMs),
+      _onEventTimeout,
+    );
+  }
+
+  void _onEventTimeout() {
+    if (!_isEventInProgress) return;
+    _processEvent();
+    _isEventInProgress = false;
+    _eventStartTime = null;
+    notifyListeners();
+  }
+
+  Future<void> _processEvent() async {
+    if (_currentMotionBuffer.length < _minEventSamplesRequired) return;
+
+    DateTime cutoffTime = DateTime.now().subtract(Duration(milliseconds: _eventTimeoutMs * 2));
+    List<MotionData> eventData = _currentMotionBuffer
+        .where((data) => data.timestamp.isAfter(cutoffTime))
+        .toList();
+
+    if (eventData.length < _minEventSamplesRequired) return;
+
+    List<double> features = _featureExtractor.extractFeatures(eventData);
+    ClassificationResult result = await _classifier.classify(features);
+
+    if (result.confidence > 0.6) {
+      _recentDetections.add(result);
+      if (_recentDetections.length > _maxRecentDetections) {
+        _recentDetections.removeAt(0);
+      }
+
+      // Create a road damage event and notify listeners
+      if (_currentLocation != null) {
+        final event = RoadFeatureEvent(
+          type: result.featureType,
+          latitude: _currentLocation!.latitude,
+          longitude: _currentLocation!.longitude,
+          timestamp: DateTime.now().millisecondsSinceEpoch,
+        );
+
+        _notifyRoadDamageEvent(event);
+      }
+      notifyListeners();
+    }
+  }
+
+  Future<void> addTrainingExample(RoadFeatureType featureType, LatLng location) async {
+    if (_currentMotionBuffer.length < _minEventSamplesRequired) return;
+
+    TrainingExample example = TrainingExample(
+      motionSequence: List.from(_currentMotionBuffer),
+      featureType: featureType,
+      location: location,
+    );
+
+    _trainingData.add(example);
+    await _classifier.train(_trainingData);
+    await _saveTrainingData();
+    notifyListeners();
+  }
+
+  Future<void> removeTrainingExample(int index) async {
+    if (index < 0 || index >= _trainingData.length) return;
+
+    _trainingData.removeAt(index);
+    await _classifier.train(_trainingData);
+    await _saveTrainingData();
+    notifyListeners();
+  }
+
+  Future<void> clearTrainingData() async {
+    _trainingData.clear();
+    await _classifier.train(_trainingData);
+    await _saveTrainingData();
+    notifyListeners();
+  }
+
+  Future<void> _loadTrainingData() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      String? jsonData = prefs.getString(_trainingDataKey);
+
+      if (jsonData != null) {
+        List<dynamic> jsonList = jsonDecode(jsonData);
+        _trainingData.clear();
+        for (var json in jsonList) {
+          _trainingData.add(TrainingExample.fromJson(json));
+        }
+        await _classifier.train(_trainingData);
+      }
+    } catch (e) {
+      debugPrint('Error loading training data: $e');
+    }
+  }
+
+  Future<void> _saveTrainingData() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      List<Map<String, dynamic>> jsonList =
+      _trainingData.map((example) => example.toJson()).toList();
+      String jsonData = jsonEncode(jsonList);
+      await prefs.setString(_trainingDataKey, jsonData);
+    } catch (e) {
+      debugPrint('Error saving training data: $e');
+    }
+  }
+
+  Future<ClassificationResult> testClassify(List<MotionData> motionData) async {
+    List<double> features = _featureExtractor.extractFeatures(motionData);
+    return await _classifier.classify(features);
+  }
+
+  // Update training example count - formerly floating function
+  void updateTrainingExampleCount(int count) {
+    _aiService.updateTrainingExampleCount(count);
+    notifyListeners();
+  }
+
+  // Collect training example - formerly floating function
+  Future<Map<String, dynamic>> collectTrainingExample() async {
+    if (_currentLocation == null) {
+      await _locationService.getLocation().then((location) {
+        _currentLocation = location;
+      });
+    }
+
+    // Ensure we have some motion data
+    if (!_isMonitoring) {
+      // Collect a brief sample of motion data
+      await _startBriefSampling();
+    }
+
+    // Get the latest motion buffer from AI service
+    final features = await _aiService.getMotionFeatures();
+
+    return features;
+  }
+
+  // Brief sampling of motion data - formerly floating function
+  Future<void> _startBriefSampling() async {
+    // Store original monitoring state
+    final wasMonitoring = _isMonitoring;
+
+    // Start monitoring if not already active
+    if (!_isMonitoring) {
+      startMonitoring();
+    }
+
+    // Wait for enough data (about 2 seconds)
+    await Future.delayed(const Duration(seconds: 2));
+
+    // Return to original state if we weren't monitoring before
+    if (!wasMonitoring) {
+      stopMonitoring();
+    }
+  }
+
+  // Train model with provided data - formerly floating function
+  Future<bool> trainModelWithData(List<Map<String, dynamic>> examples) async {
+    try {
+      // Pass the examples to the AI service for training
+      final success = await _aiService.trainModel(examples);
+      return success;
+    } catch (e) {
+      if (kDebugMode) {
+        print('Error training model: $e');
+      }
+      return false;
+    }
+  }
+
+// Export trained model data - formerly floating function
+// Export trained model data - formerly floating function
+  Future<Map<String, dynamic>> exportTrainedModelData() async {
+    try {
+      // Get model data from the AI service
+      final modelData = await _aiService.exportModelData();
+      return modelData;
+    } catch (e) {
+      if (kDebugMode) {
+        print('Error exporting model data: $e');
+      }
+      return {'error': 'Failed to export model data: ${e.toString()}'};
+    }
+  }
+
+  // Clear existing training data - formerly floating function
+  Future<void> clearExistingTrainingData() async {
+    try {
+      await _aiService.clearTrainingData();
+      await clearTrainingData(); // Clear local training data as well
+    } catch (e) {
+      if (kDebugMode) {
+        print('Error clearing training data: $e');
+      }
+    }
+  }
+
+  // Get current location
+  Future<CustomLocationData> getCurrentLocation() async {
+    if (_currentLocation == null) {
+      _currentLocation = await _locationService.getLocation();
+    }
+    return _currentLocation!;
+  }
+
+  // Check if there's enough motion data for classification
+  bool hasEnoughDataForClassification() {
+    return _currentMotionBuffer.length >= _minEventSamplesRequired;
+  }
+
+  // Force classification even without event trigger
+  Future<RoadFeatureEvent?> forceClassification() async {
+    if (!hasEnoughDataForClassification()) {
+      return null;
+    }
+
+    ClassificationResult result = await analyzeCurrentBufferAsync();
+
+    if (result.confidence > 0.4) { // Lower threshold for forced classification
+      _recentDetections.add(result);
+      if (_recentDetections.length > _maxRecentDetections) {
+        _recentDetections.removeAt(0);
+      }
+
+      // Get current location if not available
+      if (_currentLocation == null) {
+        _currentLocation = await _locationService.getLocation();
+      }
+
+      final event = RoadFeatureEvent(
+        type: result.featureType,
+        latitude: _currentLocation!.latitude,
+        longitude: _currentLocation!.longitude,
+        timestamp: DateTime.now().millisecondsSinceEpoch,
+      );
+
+      _notifyRoadDamageEvent(event);
+      notifyListeners();
+      return event;
+    }
+
+    return null;
+  }
+
+  // Get statistics about detections
+  Map<String, dynamic> getDetectionStatistics() {
+    // Count detections by type
+    Map<RoadFeatureType, int> countByType = {};
+    for (var type in RoadFeatureType.values) {
+      countByType[type] = 0;
+    }
+
+    for (var detection in _recentDetections) {
+      countByType[detection.featureType] = (countByType[detection.featureType] ?? 0) + 1;
+    }
+
+    // Calculate average severity by type
+    Map<RoadFeatureType, double> avgSeverityByType = {};
+    Map<RoadFeatureType, List<double>> severitiesByType = {};
+
+    for (var type in RoadFeatureType.values) {
+      severitiesByType[type] = [];
+    }
+
+    for (var detection in _recentDetections) {
+      severitiesByType[detection.featureType]!.add(detection.severity);
+    }
+
+    for (var type in RoadFeatureType.values) {
+      if (severitiesByType[type]!.isEmpty) {
+        avgSeverityByType[type] = 0.0;
+      } else {
+        double sum = severitiesByType[type]!.reduce((a, b) => a + b);
+        avgSeverityByType[type] = sum / severitiesByType[type]!.length;
+      }
+    }
+
+    return {
+      'totalDetections': _recentDetections.length,
+      'countByType': countByType,
+      'avgSeverityByType': avgSeverityByType,
+      'trainingExampleCount': _trainingData.length,
+    };
+  }
+
+  // Update event detection settings
+  void updateSettings({double? threshold, int? bufferSize, int? minSamples, int? eventTimeout}) {
+    if (threshold != null) _eventThreshold = threshold;
+    if (bufferSize != null && bufferSize > 0) {
+      int oldSize = _bufferSize;
+      int newSize = bufferSize;
+
+      // Handle buffer size change
+      if (newSize < oldSize && _currentMotionBuffer.length > newSize) {
+        // Remove oldest entries to match new size
+        _currentMotionBuffer.removeRange(0, _currentMotionBuffer.length - newSize);
+      }
+    }
+
+    if (minSamples != null && minSamples > 0) {
+      _minEventSamplesRequired = minSamples;
+    }
+
+    if (eventTimeout != null && eventTimeout > 0) {
+      // Update timeout but don't reset current timer if active
+      _eventTimeout?.cancel();
+      _eventTimeout = Timer(
+        Duration(milliseconds: eventTimeout),
+        _onEventTimeout,
+      );
+    }
+
+    notifyListeners();
+  }
+
+  // Dispose method to clean up resources
   void dispose() {
-    stopMonitoring();
+    _eventTimeout?.cancel();
     super.dispose();
   }
 }

@@ -1,8 +1,8 @@
-// lib/repositories/firebase_repository.dart
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import '../models/road_damage.dart';
+import '../models/road_feature_type.dart'; // Added import for RoadFeatureType
 
 class FirebaseRepository {
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
@@ -34,7 +34,14 @@ class FirebaseRepository {
       await _ensureUserLoggedIn();
 
       // Get current user ID
-      String userId = _auth.currentUser!.uid;
+      String? userId = _auth.currentUser?.uid;
+      if (userId == null || userId.isEmpty) {
+        print('Error: No user logged in');
+        return false;
+      }
+
+      // Use a batch write for better performance with multiple writes
+      WriteBatch batch = _firestore.batch();
 
       // Upload each damage record
       for (RoadDamage damage in damages) {
@@ -53,10 +60,12 @@ class FirebaseRepository {
           'verified': damage.verified ?? false,
         };
 
-        // Set the data in Firestore
-        await docRef.set(data);
+        // Add to batch
+        batch.set(docRef, data);
       }
 
+      // Commit the batch
+      await batch.commit();
       return true;
     } catch (e) {
       print('Error uploading road damage data: $e');
@@ -133,17 +142,29 @@ class FirebaseRepository {
       await _ensureUserLoggedIn();
 
       // Get current user ID
-      String userId = _auth.currentUser!.uid;
+      String? userId = _auth.currentUser?.uid;
+      if (userId == null || userId.isEmpty) {
+        print('Error: No user logged in');
+        return false;
+      }
 
       // Query all documents belonging to this user
       QuerySnapshot snapshot = await _roadDamageCollection
           .where('userId', isEqualTo: userId)
           .get();
 
-      // Delete each document
-      for (DocumentSnapshot doc in snapshot.docs) {
-        await doc.reference.delete();
+      // Check if there are documents to delete
+      if (snapshot.docs.isEmpty) {
+        print('No documents found to delete');
+        return true;
       }
+
+      // Use a batch delete for better performance
+      WriteBatch batch = _firestore.batch();
+      for (DocumentSnapshot doc in snapshot.docs) {
+        batch.delete(doc.reference);
+      }
+      await batch.commit();
 
       return true;
     } catch (e) {
@@ -151,5 +172,12 @@ class FirebaseRepository {
       return false;
     }
   }
-}
 
+// Consider replacing this with RoadFeatureTypeExtension.fromString from your extension
+// Or you can leave this method and make it use the extension internally
+/*
+  RoadFeatureType _parseRoadFeatureType(String typeString) {
+    return RoadFeatureTypeExtension.fromString(typeString);
+  }
+  */
+}

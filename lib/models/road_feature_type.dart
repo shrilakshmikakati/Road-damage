@@ -1,9 +1,30 @@
+// lib/models/road_feature_type.dart
+import 'package:flutter/material.dart';
+
 enum RoadFeatureType {
   pothole,
   roughPatch,
   speedBreaker,
   railwayCrossing,
   smooth,
+}
+
+// Separate class for getting icons - NOT nested inside another class
+class RoadFeatureIcons {
+  static IconData getIcon(RoadFeatureType type) {
+    switch (type) {
+      case RoadFeatureType.pothole:
+        return Icons.warning;
+      case RoadFeatureType.roughPatch:
+        return Icons.waves;
+      case RoadFeatureType.speedBreaker:
+        return Icons.speed;
+      case RoadFeatureType.railwayCrossing:
+        return Icons.train;
+      case RoadFeatureType.smooth:
+        return Icons.check_circle;
+    }
+  }
 }
 
 // Extension methods for RoadFeatureType

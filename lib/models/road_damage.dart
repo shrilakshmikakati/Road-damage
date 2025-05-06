@@ -1,6 +1,5 @@
 // lib/models/road_damage.dart
 // Updated to use the unified RoadFeatureType
-import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'road_feature_type.dart';

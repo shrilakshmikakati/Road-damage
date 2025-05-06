@@ -3,11 +3,10 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:math' as math;
 import 'package:flutter/foundation.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import '../models/road_feature_type.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
-// Motion data class for sensor readings
 class MotionData {
   final double accelerationX;
   final double accelerationY;
@@ -26,24 +25,6 @@ class MotionData {
     required this.gyroZ,
     required this.timestamp,
   });
-
-  // Calculate the magnitude of acceleration
-  double get accelerationMagnitude {
-    return math.sqrt(
-        math.pow(accelerationX, 2) +
-            math.pow(accelerationY, 2) +
-            math.pow(accelerationZ, 2)
-    );
-  }
-
-  // Calculate the magnitude of gyroscope reading
-  double get gyroscopeMagnitude {
-    return math.sqrt(
-        math.pow(gyroX, 2) +
-            math.pow(gyroY, 2) +
-            math.pow(gyroZ, 2)
-    );
-  }
 
   Map<String, dynamic> toJson() {
     return {
@@ -70,347 +51,385 @@ class MotionData {
   }
 }
 
-// Training example class for ML model
-class TrainingExample {
-  final List<MotionData> motionSequence;
-  final RoadFeatureType featureType;
-  final LatLng location;
-
-  TrainingExample({
-    required this.motionSequence,
-    required this.featureType,
-    required this.location,
-  });
-
-  Map<String, dynamic> toJson() {
-    return {
-      'motionSequence': motionSequence.map((e) => e.toJson()).toList(),
-      'featureType': featureType.toString().split('.').last,
-      'lat': location.latitude,
-      'lng': location.longitude,
-    };
-  }
-
-  factory TrainingExample.fromJson(Map<String, dynamic> json) {
-    List<dynamic> motionList = json['motionSequence'];
-    return TrainingExample(
-      motionSequence: motionList.map((e) => MotionData.fromJson(e)).toList(),
-      featureType: RoadFeatureTypeExtension.fromString(json['featureType']),
-      location: LatLng(json['lat'], json['lng']),
-    );
-  }
-
-  // Extract features from this training example
-  List<double> extractFeatures() {
-    if (motionSequence.isEmpty) return List.filled(10, 0.0);
-
-    // Calculate features
-    double avgAccel = _calculateAverage(
-        motionSequence.map((m) => m.accelerationMagnitude).toList()
-    );
-    double peakAccel = _calculatePeak(
-        motionSequence.map((m) => m.accelerationMagnitude).toList()
-    );
-    double avgGyro = _calculateAverage(
-        motionSequence.map((m) => m.gyroscopeMagnitude).toList()
-    );
-    double peakGyro = _calculatePeak(
-        motionSequence.map((m) => m.gyroscopeMagnitude).toList()
-    );
-    double symmetry = _calculateSymmetry(
-        motionSequence.map((m) => m.accelerationMagnitude).toList()
-    );
-    int durationMs = motionSequence.last.timestamp
-        .difference(motionSequence.first.timestamp).inMilliseconds;
-    double durationSec = durationMs / 1000.0;
-
-    // Return feature vector
-    return [
-      avgAccel,
-      peakAccel,
-      avgGyro,
-      peakGyro,
-      symmetry,
-      durationSec,
-      peakAccel / avgAccel, // peak-to-average ratio
-      avgGyro / avgAccel,   // gyro-to-accel ratio
-      durationSec * avgAccel, // energy proxy
-      motionSequence.length.toDouble() // sample count
-    ];
-  }
-
-  // Helper methods for feature extraction
-  double _calculateAverage(List<double> values) {
-    if (values.isEmpty) return 0.0;
-    return values.reduce((a, b) => a + b) / values.length;
-  }
-
-  double _calculatePeak(List<double> values) {
-    if (values.isEmpty) return 0.0;
-    return values.reduce(math.max);
-  }
-
-  double _calculateSymmetry(List<double> signal) {
-    if (signal.length < 2) return 1.0;
-
-    int midpoint = signal.length ~/ 2;
-    int compareLength = math.min(midpoint, signal.length - midpoint);
-
-    double totalDiff = 0;
-    double maxPossibleDiff = 0;
-
-    for (int i = 0; i < compareLength; i++) {
-      double left = signal[midpoint - i - 1];
-      double right = signal[midpoint + i];
-      totalDiff += (left - right).abs();
-      maxPossibleDiff += math.max(left, right);
-    }
-
-    if (maxPossibleDiff == 0) return 1.0;
-    return 1.0 - (totalDiff / maxPossibleDiff);
-  }
-}
-
-// Classification result
-class ClassificationResult {
-  final RoadFeatureType featureType;
-  final double confidence;
+class AnalysisResult {
   final double severity;
-  final Map<RoadFeatureType, double> probabilities;
+  final bool isDamaged;
+  final RoadFeatureType featureType;
 
-  ClassificationResult({
-    required this.featureType,
-    required this.confidence,
+  AnalysisResult({
     required this.severity,
-    required this.probabilities,
+    required this.isDamaged,
+    required this.featureType,
   });
 }
 
-// Feature extractor interface
-abstract class FeatureExtractor {
-  List<double> extractFeatures(List<MotionData> motionData);
-}
+class DamageAIService implements AIService {
+  static const String _trainingDataKey = 'ai_training_data';
+  static const String _modelDataKey = 'ai_model_data';
+  static const int _bufferSize = 50; // Number of motion samples to keep
 
-// Simple feature extractor implementation
-class SimpleFeatureExtractor implements FeatureExtractor {
+
+
+  // Motion data buffer
+  final List<MotionData> _motionBuffer = [];
+
+  // Training data
+  List<Map<String, dynamic>> _trainingExamples = [];
+
+  // Model state
+  bool _isModelTrained = false;
+  int _trainingExampleCount = 0;
+
+  // Initialize the service
   @override
-  List<double> extractFeatures(List<MotionData> motionData) {
-    if (motionData.isEmpty) return List.filled(10, 0.0);
+  Future<void> initialize() async {
+    await _loadTrainingData();
+    await _loadModelData();
 
-    // Calculate average and peak magnitudes
-    double avgAccel = 0;
-    double maxAccel = 0;
-    double avgGyro = 0;
-    double maxGyro = 0;
 
-    for (var motion in motionData) {
-      double accelMag = motion.accelerationMagnitude;
-      double gyroMag = motion.gyroscopeMagnitude;
-
-      avgAccel += accelMag;
-      avgGyro += gyroMag;
-
-      if (accelMag > maxAccel) maxAccel = accelMag;
-      if (gyroMag > maxGyro) maxGyro = gyroMag;
-    }
-
-    avgAccel /= motionData.length;
-    avgGyro /= motionData.length;
-
-    // Calculate pattern features
-    int durationMs = motionData.last.timestamp
-        .difference(motionData.first.timestamp).inMilliseconds;
-    double durationSec = durationMs / 1000.0;
-
-    // Calculate symmetry
-    List<double> accelProfile = motionData.map((m) => m.accelerationMagnitude).toList();
-    double symmetry = _calculateSymmetry(accelProfile);
-
-    // Return feature vector
-    return [
-      avgAccel,
-      maxAccel,
-      avgGyro,
-      maxGyro,
-      symmetry,
-      durationSec,
-      maxAccel / (avgAccel > 0 ? avgAccel : 1.0), // peak-to-average ratio
-      avgGyro / (avgAccel > 0 ? avgAccel : 1.0),  // gyro-to-accel ratio
-      durationSec * avgAccel, // energy proxy
-      motionData.length.toDouble() // sample count
-    ];
   }
 
-  // Calculate symmetry of signal (0 = asymmetric, 1 = symmetric)
-  double _calculateSymmetry(List<double> signal) {
-    if (signal.length < 2) return 1.0;
+  // Load training data from storage
+  Future<void> _loadTrainingData() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final jsonData = prefs.getString(_trainingDataKey);
 
-    int midpoint = signal.length ~/ 2;
-    int compareLength = math.min(midpoint, signal.length - midpoint);
-
-    double totalDiff = 0;
-    double maxPossibleDiff = 0;
-
-    for (int i = 0; i < compareLength; i++) {
-      double left = signal[midpoint - i - 1];
-      double right = signal[midpoint + i];
-      totalDiff += (left - right).abs();
-      maxPossibleDiff += math.max(left, right);
+      if (jsonData != null) {
+        final data = jsonDecode(jsonData) as Map<String, dynamic>;
+        _trainingExampleCount = data['count'] ?? 0;
+        _trainingExamples = List<Map<String, dynamic>>.from(data['examples'] ?? []);
+      }
+    } catch (e) {
+      if (kDebugMode) {
+        print('Error loading training data: $e');
+      }
+      _trainingExampleCount = 0;
+      _trainingExamples = [];
     }
-
-    if (maxPossibleDiff == 0) return 1.0;
-    return 1.0 - (totalDiff / maxPossibleDiff);
   }
-}
 
-// Classifier interface
-abstract class Classifier {
-  Future<ClassificationResult> classify(List<double> features);
-  Future<void> train(List<TrainingExample> examples);
-}
+  // Load model data from storage
+  Future<void> _loadModelData() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final jsonData = prefs.getString(_modelDataKey);
 
-// Threshold-based classifier implementation
-class ThresholdClassifier implements Classifier {
-  // Thresholds for different types of road features
-  Map<RoadFeatureType, double> _thresholds = {
-    RoadFeatureType.pothole: 2.0,
-    RoadFeatureType.speedBreaker: 1.5,
-    RoadFeatureType.railwayCrossing: 1.8,
-    RoadFeatureType.roughPatch: 1.2,
-    RoadFeatureType.smooth: 0.0,
-  };
+      if (jsonData != null) {
+        _isModelTrained = true;
+        // In a real app, you would load model weights or parameters here
+      }
+    } catch (e) {
+      if (kDebugMode) {
+        print('Error loading model data: $e');
+      }
+      _isModelTrained = false;
+    }
+  }
 
-  // Classification weights for each feature
-  final List<double> _weights = [0.3, 0.5, 0.1, 0.1, 0.7, 0.3, 0.4, 0.2, 0.3, 0.1];
+  // Save training data to storage
+  Future<void> _saveTrainingData() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final data = {
+        'count': _trainingExampleCount,
+        'examples': _trainingExamples,
+      };
+      await prefs.setString(_trainingDataKey, jsonEncode(data));
+    } catch (e) {
+      if (kDebugMode) {
+        print('Error saving training data: $e');
+      }
+    }
+  }
 
+  // Save model data to storage
+  Future<void> _saveModelData(Map<String, dynamic> modelData) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(_modelDataKey, jsonEncode(modelData));
+      _isModelTrained = true;
+    } catch (e) {
+      if (kDebugMode) {
+        print('Error saving model data: $e');
+      }
+    }
+  }
+
+  // Add motion data to buffer
   @override
-  Future<ClassificationResult> classify(List<double> features) async {
-    if (features.isEmpty || features.length < 10) {
-      return ClassificationResult(
-        featureType: RoadFeatureType.smooth,
-        confidence: 0.0,
+  void addMotionData(MotionData data) {
+    _motionBuffer.add(data);
+
+    // Keep buffer at the right size
+    if (_motionBuffer.length > _bufferSize) {
+      _motionBuffer.removeAt(0);
+    }
+  }
+
+  // Analyze current motion buffer
+  @override
+  AnalysisResult analyzeCurrentBuffer(LatLng position) {
+    if (_motionBuffer.isEmpty) {
+      return AnalysisResult(
         severity: 0.0,
-        probabilities: {
-          for (var type in RoadFeatureType.values) type: type == RoadFeatureType.smooth ? 1.0 : 0.0
-        },
+        isDamaged: false,
+        featureType: RoadFeatureType.smooth,
       );
     }
 
-    // Weighted score for acceleration magnitude (most important feature)
-    double severity = features[1]; // Using peak acceleration as severity
+    // Calculate features from buffer
+    final features = _calculateFeatures();
 
-    // Calculate scores for each road feature type
-    Map<RoadFeatureType, double> scores = {};
-
-    // Pothole scoring (high peak accel, low symmetry, short duration)
-    scores[RoadFeatureType.pothole] =
-        features[1] * 0.5 + // peak accel
-            (1.0 - features[4]) * 0.3 + // asymmetry (1 - symmetry)
-            (1.0 - math.min(features[5] / 0.5, 1.0)) * 0.2; // short duration
-
-    // Speed breaker scoring (high avg accel, high symmetry, medium duration)
-    scores[RoadFeatureType.speedBreaker] =
-        features[0] * 0.4 + // avg accel
-            features[4] * 0.4 + // symmetry
-            math.min(features[5] / 1.0, 1.0) * 0.2; // medium duration
-
-    // Railway crossing scoring (medium peak, high duration, medium symmetry)
-    scores[RoadFeatureType.railwayCrossing] =
-        features[1] * 0.3 + // peak accel
-            math.min(features[5] / 1.5, 1.0) * 0.5 + // longer duration
-            features[4] * 0.2; // symmetry
-
-    // Rough patch scoring (low peak, long duration, low symmetry)
-    scores[RoadFeatureType.roughPatch] =
-        math.min(features[0] / 1.0, 1.0) * 0.3 + // moderate avg accel
-            math.min(features[5] / 2.0, 1.0) * 0.5 + // long duration
-            (1.0 - features[4]) * 0.2; // asymmetry
-
-    // Smooth road scoring (low everything)
-    scores[RoadFeatureType.smooth] =
-        (1.0 - math.min(features[0] / 0.5, 1.0)) * 0.5 + // low avg accel
-            (1.0 - math.min(features[1] / 1.0, 1.0)) * 0.5; // low peak accel
-
-    // Normalize scores to sum to 1.0 (probabilities)
-    double totalScore = scores.values.reduce((a, b) => a + b);
-    Map<RoadFeatureType, double> probabilities = {};
-
-    if (totalScore > 0) {
-      for (var type in RoadFeatureType.values) {
-        probabilities[type] = scores[type]! / totalScore;
-      }
-    } else {
-      // Default to smooth if all scores are 0
-      for (var type in RoadFeatureType.values) {
-        probabilities[type] = type == RoadFeatureType.smooth ? 1.0 : 0.0;
-      }
+    // If model is trained, use it
+    if (_isModelTrained && _trainingExampleCount >= 10) {
+      return _predictWithModel(features);
     }
 
-    // Find the highest scoring feature type
-    RoadFeatureType bestType = RoadFeatureType.smooth;
-    double bestScore = 0.0;
+    // Fallback to simple analysis
+    return _simpleAnalysis(features);
+  }
 
-    for (var entry in scores.entries) {
-      if (entry.value > bestScore) {
-        bestScore = entry.value;
-        bestType = entry.key;
-      }
+  // Calculate features from motion buffer
+  Map<String, dynamic> _calculateFeatures() {
+    if (_motionBuffer.isEmpty) {
+      return {
+        'mean_accel_x': 0.0,
+        'mean_accel_y': 0.0,
+        'mean_accel_z': 0.0,
+        'std_accel_x': 0.0,
+        'std_accel_y': 0.0,
+        'std_accel_z': 0.0,
+        'max_accel_magnitude': 0.0,
+      };
     }
 
-    // Calculate confidence (normalized score)
-    double confidence = probabilities[bestType] ?? 0.0;
+    // Calculate mean values
+    double sumX = 0, sumY = 0, sumZ = 0;
+    double maxMag = 0;
 
-    return ClassificationResult(
-      featureType: bestType,
-      confidence: confidence,
-      severity: severity,
-      probabilities: probabilities,
+    for (var data in _motionBuffer) {
+      sumX += data.accelerationX;
+      sumY += data.accelerationY;
+      sumZ += data.accelerationZ;
+
+      // Calculate magnitude
+      double mag = math.sqrt(
+          data.accelerationX * data.accelerationX +
+              data.accelerationY * data.accelerationY +
+              data.accelerationZ * data.accelerationZ
+      );
+
+      if (mag > maxMag) maxMag = mag;
+    }
+
+    double meanX = sumX / _motionBuffer.length;
+    double meanY = sumY / _motionBuffer.length;
+    double meanZ = sumZ / _motionBuffer.length;
+
+    // Calculate standard deviations
+    double varX = 0, varY = 0, varZ = 0;
+
+    for (var data in _motionBuffer) {
+      varX += (data.accelerationX - meanX) * (data.accelerationX - meanX);
+      varY += (data.accelerationY - meanY) * (data.accelerationY - meanY);
+      varZ += (data.accelerationZ - meanZ) * (data.accelerationZ - meanZ);
+    }
+
+    double stdX = math.sqrt(varX / _motionBuffer.length);
+    double stdY = math.sqrt(varY / _motionBuffer.length);
+    double stdZ = math.sqrt(varZ / _motionBuffer.length);
+
+    return {
+      'mean_accel_x': meanX,
+      'mean_accel_y': meanY,
+      'mean_accel_z': meanZ,
+      'std_accel_x': stdX,
+      'std_accel_y': stdY,
+      'std_accel_z': stdZ,
+      'max_accel_magnitude': maxMag,
+    };
+  }
+
+  // Simple analysis without ML model
+  AnalysisResult _simpleAnalysis(Map<String, dynamic> features) {
+    final maxMag = features['max_accel_magnitude'];
+    final stdZ = features['std_accel_z'];
+
+    // Simple thresholds
+    if (maxMag > 5.0) {
+      return AnalysisResult(
+        severity: maxMag,
+        isDamaged: true,
+        featureType: RoadFeatureType.pothole,
+      );
+    } else if (maxMag > 3.0) {
+      return AnalysisResult(
+        severity: maxMag,
+        isDamaged: true,
+        featureType: RoadFeatureType.roughPatch,
+      );
+    } else if (stdZ > 1.5) {
+      return AnalysisResult(
+        severity: stdZ,
+        isDamaged: false,
+        featureType: RoadFeatureType.speedBreaker,
+      );
+    }
+
+    return AnalysisResult(
+      severity: maxMag,
+      isDamaged: false,
+      featureType: RoadFeatureType.smooth,
     );
   }
 
+  // Predict with ML model
+  AnalysisResult _predictWithModel(Map<String, dynamic> features) {
+    // In a real app, this would use TensorFlow Lite or similar
+    // For now, we'll just do a simple prediction
+
+    final maxMag = features['max_accel_magnitude'];
+    final stdZ = features['std_accel_z'];
+    final stdY = features['std_accel_y'];
+
+    // Simplified logic - in a real app would use the actual model
+    if (maxMag > 4.0 && stdZ > 2.0) {
+      return AnalysisResult(
+        severity: maxMag * 1.2,
+        isDamaged: true,
+        featureType: RoadFeatureType.pothole,
+      );
+    } else if (maxMag > 3.0 && stdY > 1.0) {
+      return AnalysisResult(
+        severity: maxMag,
+        isDamaged: true,
+        featureType: RoadFeatureType.roughPatch,
+      );
+    } else if (stdZ > 1.2 && stdY < 0.8) {
+      return AnalysisResult(
+        severity: stdZ * 1.5,
+        isDamaged: false,
+        featureType: RoadFeatureType.speedBreaker,
+      );
+    } else if (stdZ > 0.9 && stdY > 0.9) {
+      return AnalysisResult(
+        severity: stdZ + stdY,
+        isDamaged: false,
+        featureType: RoadFeatureType.railwayCrossing,
+      );
+    }
+
+    return AnalysisResult(
+      severity: maxMag * 0.5,
+      isDamaged: false,
+      featureType: RoadFeatureType.smooth,
+    );
+  }
+
+  // Add a training example
   @override
-  Future<void> train(List<TrainingExample> examples) async {
-    if (examples.isEmpty) return;
+  Future<void> addTrainingExample(RoadFeatureType type, LatLng position) async {
+    final features = _calculateFeatures();
 
-    // Group examples by feature type
-    Map<RoadFeatureType, List<List<double>>> featuresByType = {};
+    _trainingExamples.add({
+      'type': type.toString().split('.').last,
+      'features': features,
+      'position': {
+        'latitude': position.latitude,
+        'longitude': position.longitude,
+      },
+      'timestamp': DateTime.now().millisecondsSinceEpoch,
+    });
 
-    for (var type in RoadFeatureType.values) {
-      featuresByType[type] = [];
-    }
+    _trainingExampleCount++;
+    await _saveTrainingData();
+  }
 
-    // Extract features for each example
-    for (var example in examples) {
-      List<double> features = example.extractFeatures();
-      featuresByType[example.featureType]!.add(features);
-    }
+  // Get features for new training example
+  @override
+  Future<Map<String, dynamic>> getMotionFeatures() async {
+    return _calculateFeatures();
+  }
 
-    // Update thresholds based on average peak acceleration (feature index 1)
-    for (var type in RoadFeatureType.values) {
-      if (type == RoadFeatureType.smooth || featuresByType[type]!.isEmpty) continue;
+  // Update training example count
+  @override
+  void updateTrainingExampleCount(int count) {
+    _trainingExampleCount = count;
+    _saveTrainingData();
+  }
 
-      // Calculate average peak acceleration for this type
-      double sum = 0.0;
-      for (var features in featuresByType[type]!) {
-        sum += features[1]; // peak acceleration
+  // Train model with provided data
+  @override
+  Future<bool> trainModel(List<Map<String, dynamic>> examples) async {
+    try {
+      // In a real app, this would train a ML model
+      // For now, just simulate training
+      await Future.delayed(const Duration(seconds: 2));
+
+      // Update training examples with new data
+      _trainingExamples = List.from(examples);
+      _trainingExampleCount = examples.length;
+      await _saveTrainingData();
+
+      // Create simple model data
+      final modelData = {
+        'version': '1.0',
+        'trained_at': DateTime.now().millisecondsSinceEpoch,
+        'example_count': examples.length,
+        'model_type': 'simple_classifier',
+        // In a real app, this would contain model weights or parameters
+      };
+
+      await _saveModelData(modelData);
+      return true;
+    } catch (e) {
+      if (kDebugMode) {
+        print('Error training model: $e');
       }
-      double avg = sum / featuresByType[type]!.length;
-
-      // Update threshold with some margin
-      _thresholds[type] = avg * 0.9; // 90% of average peak
+      return false;
     }
   }
+
+  // Export trained model data
+  @override
+  Future<Map<String, dynamic>> exportModelData() async {
+    // In a real app, this would export model weights or parameters
+    return {
+      'version': '1.0',
+      'exported_at': DateTime.now().millisecondsSinceEpoch,
+      'example_count': _trainingExampleCount,
+      'model_type': 'simple_classifier',
+      // Model parameters would go here
+    };
+  }
+
+  // Clear all training data
+  @override
+  Future<void> clearTrainingData() async {
+    _trainingExamples = [];
+    _trainingExampleCount = 0;
+    _isModelTrained = false;
+
+    // Clear storage
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove(_trainingDataKey);
+    await prefs.remove(_modelDataKey);
+  }
+
+  // Get training example count
+  int get trainingExampleCount => _trainingExampleCount;
 }
 
-// Main DamageAIService class
-class DamageAIService extends ChangeNotifier {
-  static const String _trainingDataKey = 'ai_training_data';
-
-  // Components
-  final FeatureExtractor _featureExtractor = SimpleFeatureExtractor();
-  late final Classifier _classifier;
-
-  // Data
-  List<TrainingExample> _trainingData = [];
-  List<MotionData> _currentMotionBuffer = [];
-  static const int _bufferSize = 50; // Store last 50
+// Add this to the file if it's missing
+abstract class AIService {
+  void addMotionData(MotionData data);
+  AnalysisResult analyzeCurrentBuffer(LatLng position);
+  Future<void> addTrainingExample(RoadFeatureType type, LatLng position);
+  Future<Map<String, dynamic>> getMotionFeatures();
+  void updateTrainingExampleCount(int count);
+  Future<bool> trainModel(List<Map<String, dynamic>> examples);
+  Future<Map<String, dynamic>> exportModelData();
+  Future<void> clearTrainingData();
+  Future<void> initialize() async {} // Provide a default empty implementation
+}

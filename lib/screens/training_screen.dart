@@ -1,11 +1,11 @@
 // lib/screens/training_screen.dart
 import 'package:flutter/material.dart';
 import '../utils/damage_detector.dart';
-import '../repositories/damage_repository.dart';
 import 'package:provider/provider.dart';
+import '../services/damage_ai_service.dart';
+import '../services/location_service.dart';
 import '../provider/settings_provider.dart';
 import '../models/road_feature_type.dart';
-// Import the enum from a separate file
 import 'package:firebase_database/firebase_database.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 
@@ -19,8 +19,8 @@ class TrainingScreen extends StatefulWidget {
 }
 
 class _TrainingScreenState extends State<TrainingScreen> {
-  final DamageDetector _damageDetector = DamageDetector();
-  final DamageRepository _repository = DamageRepository();
+  late final DamageDetector _damageDetector;
+  // The repository can be removed if not used
   bool _isTraining = false;
   String _trainingStatus = '';
   int _currentExampleCount = 0;
@@ -30,6 +30,10 @@ class _TrainingScreenState extends State<TrainingScreen> {
   @override
   void initState() {
     super.initState();
+    _damageDetector = DamageDetector(
+        aiService: DamageAIService(),
+        locationService: LocationServiceImpl(),
+    );
     _initialize();
   }
 
@@ -87,7 +91,7 @@ class _TrainingScreenState extends State<TrainingScreen> {
 
         // Save model to Firebase
         if (success) {
-          final modelData = await _damageDetector.exportModel();
+          final modelData = await _damageDetector.exportTrainedModelData();
           await _trainingDataRef.child(_userId!).child('model').set(modelData);
         }
 

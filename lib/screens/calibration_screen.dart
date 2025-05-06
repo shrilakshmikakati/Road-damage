@@ -2,7 +2,10 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../provider/settings_provider.dart';
+import 'package:location/location.dart';
 import '../utils/damage_detector.dart';
+import '../services/location_service.dart';
+import '../services/damage_ai_service.dart';
 import '../repositories/damage_repository.dart';
 
 class CalibrationScreen extends StatefulWidget {
@@ -15,7 +18,10 @@ class CalibrationScreen extends StatefulWidget {
 }
 
 class _CalibrationScreenState extends State<CalibrationScreen> {
-  final DamageDetector _damageDetector = DamageDetector();
+  final DamageDetector _damageDetector = DamageDetector(
+    aiService: DamageAIService(),
+    locationService: LocationServiceImpl(),
+  );
   final DamageRepository _repository = DamageRepository();
   bool _syncInProgress = false;
   String _syncStatus = '';

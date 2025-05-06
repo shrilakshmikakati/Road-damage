@@ -1,24 +1,21 @@
-// lib/screens/home_map_screen.dart
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:location/location.dart';
 import '../utils/damage_detector.dart';
+import '../models/custom_location_data.dart';
+import '../services/location_service.dart';
 import '../services/damage_ai_service.dart';
 import 'package:flutter/services.dart';
 import 'dart:ui' as ui;
-import 'dart:typed_data';
-import 'package:provider/provider.dart';
-import '../provider/settings_provider.dart';
-import '../models/road_feature_type.dart'; // Import the enum from a separate file
-import '../repositories/damage_repository.dart'; // Import for Firebase persistence
-import 'package:firebase_auth/firebase_auth.dart'; // For user authentication
-import 'package:firebase_database/firebase_database.dart'; // For realtime database
+import '../models/road_feature_type.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+import 'package:firebase_database/firebase_database.dart';
+
 
 class HomeMapScreen extends StatefulWidget {
   const HomeMapScreen({Key? key}) : super(key: key);
 
-  // Add static route name
   static const routeName = '/home';
 
   @override
@@ -26,16 +23,13 @@ class HomeMapScreen extends StatefulWidget {
 }
 
 class _HomeMapScreenState extends State<HomeMapScreen> {
-  // Google Maps controller
   final Completer<GoogleMapController> _controller = Completer();
 
-  // Current camera position
   CameraPosition _initialCameraPosition = const CameraPosition(
     target: LatLng(37.42796133580664, -122.085749655962),
     zoom: 14.0,
   );
 
-  // Markers and polylines
   final Set<Marker> _markers = {};
   final Set<Polyline> _polylines = {};
   final Map<RoadFeatureType, List<LatLng>> _roadSegments = {
@@ -46,104 +40,87 @@ class _HomeMapScreenState extends State<HomeMapScreen> {
     RoadFeatureType.smooth: [],
   };
 
-  // Damage detector reference
-  final DamageDetector _damageDetector = DamageDetector();
-
-  // Repository for Firebase operations
-  final DamageRepository _repository = DamageRepository();
-
-  // Location service
+  late DamageDetector _damageDetector;
   final Location _locationService = Location();
   LocationData? _currentLocation;
 
-  // Tracking state
   bool _isTracking = false;
   bool _firstLocationUpdate = true;
   bool _isAIMode = true;
 
-  // Custom markers
   BitmapDescriptor? _potholeMarkerIcon;
   BitmapDescriptor? _speedBreakerMarkerIcon;
   BitmapDescriptor? _smoothMarkerIcon;
   BitmapDescriptor? _railwayCrossingMarkerIcon;
   BitmapDescriptor? _roughPatchMarkerIcon;
 
-  // Firebase reference
-  final DatabaseReference _databaseRef = FirebaseDatabase.instance.ref('road_data');
+  final DatabaseReference _databaseRef =
+  FirebaseDatabase.instance.ref('road_data');
   String? _userId;
 
   @override
   void initState() {
     super.initState();
+
+    final DamageDetector _damageDetector = DamageDetector(
+      aiService: DamageAIService(),
+      locationService: LocationServiceImpl()
+    );
     _initializeApp();
   }
 
   Future<void> _initializeApp() async {
-    // Get current user ID
     _userId = FirebaseAuth.instance.currentUser?.uid;
-
-    // Create custom marker icons
     await _createMarkerIcons();
-
-    // Initialize damage detector
     await _damageDetector.initialize();
 
-    // Add listener for road damage events
-    _damageDetector.addListener(_onRoadDamageEvent);
+    _damageDetector.addRoadFeatureEventListener((event) {
+      _handleRoadFeatureEvent(event);
+      return event;
+    });
 
-    // Get initial location
     await _getCurrentLocation();
-
-    // Load saved road data
     _loadSavedRoadData();
-
-    // Get AI mode status
     _isAIMode = _damageDetector.isAIEnabled;
   }
 
+  void _handleRoadFeatureEvent(RoadFeatureEvent event) {
+    if (!mounted) return;
+
+    setState(() {
+      _roadSegments[event.type]?.add(LatLng(event.latitude, event.longitude));
+      _addMarker(event);
+      _updatePolylines();
+    });
+
+    _saveRoadFeatureToFirebase(event);
+  }
+
   Future<void> _createMarkerIcons() async {
-    // Create custom marker for potholes
-    final Uint8List potholeMarkerIcon = await _getBytesFromCanvas(
-        'P',
-        Colors.red,
-        Colors.white
-    );
+    final Uint8List potholeMarkerIcon =
+    await _getBytesFromCanvas('P', Colors.red, Colors.white);
     _potholeMarkerIcon = BitmapDescriptor.fromBytes(potholeMarkerIcon);
 
-    // Create custom marker for speed breakers
-    final Uint8List speedBreakerMarkerIcon = await _getBytesFromCanvas(
-        'B',
-        Colors.orange,
-        Colors.white
-    );
+    final Uint8List speedBreakerMarkerIcon =
+    await _getBytesFromCanvas('B', Colors.orange, Colors.white);
     _speedBreakerMarkerIcon = BitmapDescriptor.fromBytes(speedBreakerMarkerIcon);
 
-    // Create custom marker for railway crossings
-    final Uint8List railwayCrossingMarkerIcon = await _getBytesFromCanvas(
-        'R',
-        Colors.purple,
-        Colors.white
-    );
-    _railwayCrossingMarkerIcon = BitmapDescriptor.fromBytes(railwayCrossingMarkerIcon);
+    final Uint8List railwayCrossingMarkerIcon =
+    await _getBytesFromCanvas('R', Colors.purple, Colors.white);
+    _railwayCrossingMarkerIcon =
+        BitmapDescriptor.fromBytes(railwayCrossingMarkerIcon);
 
-    // Create custom marker for rough patches
-    final Uint8List roughPatchMarkerIcon = await _getBytesFromCanvas(
-        'X',
-        Colors.amber,
-        Colors.white
-    );
+    final Uint8List roughPatchMarkerIcon =
+    await _getBytesFromCanvas('X', Colors.amber, Colors.white);
     _roughPatchMarkerIcon = BitmapDescriptor.fromBytes(roughPatchMarkerIcon);
 
-    // Create custom marker for smooth roads
-    final Uint8List smoothMarkerIcon = await _getBytesFromCanvas(
-        'S',
-        Colors.blue,
-        Colors.white
-    );
+    final Uint8List smoothMarkerIcon =
+    await _getBytesFromCanvas('S', Colors.blue, Colors.white);
     _smoothMarkerIcon = BitmapDescriptor.fromBytes(smoothMarkerIcon);
   }
 
-  Future<Uint8List> _getBytesFromCanvas(String text, Color backgroundColor, Color textColor) async {
+  Future<Uint8List> _getBytesFromCanvas(
+      String text, Color backgroundColor, Color textColor) async {
     final ui.PictureRecorder pictureRecorder = ui.PictureRecorder();
     final Canvas canvas = Canvas(pictureRecorder);
     final Paint paint = Paint()..color = backgroundColor;
@@ -161,24 +138,14 @@ class _HomeMapScreenState extends State<HomeMapScreen> {
 
     textPainter.layout();
 
-    // Draw circle background
-    canvas.drawCircle(
-        const Offset(24, 24),
-        24,
-        paint
-    );
-
-    // Draw text
+    canvas.drawCircle(const Offset(24, 24), 24, paint);
     textPainter.paint(
-        canvas,
-        Offset(
-            24 - textPainter.width / 2,
-            24 - textPainter.height / 2
-        )
-    );
+        canvas, Offset(24 - textPainter.width / 2, 24 - textPainter.height / 2));
 
-    final ui.Image image = await pictureRecorder.endRecording().toImage(48, 48);
-    final ByteData? byteData = await image.toByteData(format: ui.ImageByteFormat.png);
+    final ui.Image image =
+    await pictureRecorder.endRecording().toImage(48, 48);
+    final ByteData? byteData =
+    await image.toByteData(format: ui.ImageByteFormat.png);
 
     return byteData!.buffer.asUint8List();
   }
@@ -188,8 +155,7 @@ class _HomeMapScreenState extends State<HomeMapScreen> {
       _currentLocation = await _locationService.getLocation();
       if (_currentLocation != null) {
         _updateCameraPosition(
-            LatLng(_currentLocation!.latitude!, _currentLocation!.longitude!)
-        );
+            LatLng(_currentLocation!.latitude!, _currentLocation!.longitude!));
       }
     } catch (e) {
       debugPrint('Error getting location: $e');
@@ -205,28 +171,9 @@ class _HomeMapScreenState extends State<HomeMapScreen> {
     controller.animateCamera(CameraUpdate.newCameraPosition(newPosition));
   }
 
-  void _onRoadDamageEvent(RoadFeatureEvent event) {
-    if (!mounted) return;
-
-    setState(() {
-      // Add to appropriate segment list
-      _roadSegments[event.type]?.add(LatLng(event.latitude, event.longitude));
-
-      // Add marker
-      _addMarker(event);
-
-      // Update polylines
-      _updatePolylines();
-    });
-
-    // Save to Firebase
-    _saveRoadFeatureToFirebase(event);
-  }
-
   void _addMarker(RoadFeatureEvent event) {
     BitmapDescriptor? icon;
 
-    // Select appropriate icon
     switch (event.type) {
       case RoadFeatureType.pothole:
         icon = _potholeMarkerIcon;
@@ -245,7 +192,8 @@ class _HomeMapScreenState extends State<HomeMapScreen> {
         break;
     }
 
-    final markerId = MarkerId("${event.type}_${DateTime.now().millisecondsSinceEpoch}");
+    final markerId =
+    MarkerId("${event.type}_${DateTime.now().millisecondsSinceEpoch}");
 
     final marker = Marker(
       markerId: markerId,
@@ -263,7 +211,6 @@ class _HomeMapScreenState extends State<HomeMapScreen> {
   void _updatePolylines() {
     _polylines.clear();
 
-    // Add polylines for each road feature type with different colors
     if (_roadSegments[RoadFeatureType.pothole]!.isNotEmpty) {
       _polylines.add(
         Polyline(
@@ -324,18 +271,15 @@ class _HomeMapScreenState extends State<HomeMapScreen> {
     if (_userId == null) return;
 
     try {
-      // Get data from Firebase
       final snapshot = await _databaseRef.child(_userId!).get();
 
       if (snapshot.exists) {
         final data = snapshot.value as Map<dynamic, dynamic>;
 
         setState(() {
-          // Clear existing data
           _markers.clear();
           _roadSegments.forEach((key, value) => value.clear());
 
-          // Load data for each feature type
           data.forEach((key, value) {
             final featureData = value as Map<dynamic, dynamic>;
             final featureType = _getFeatureTypeFromString(key);
@@ -346,7 +290,6 @@ class _HomeMapScreenState extends State<HomeMapScreen> {
               final longitude = feature['longitude'] as double;
               final timestamp = feature['timestamp'] as int;
 
-              // Create event and add to map
               final event = RoadFeatureEvent(
                 type: featureType,
                 latitude: latitude,
@@ -354,15 +297,11 @@ class _HomeMapScreenState extends State<HomeMapScreen> {
                 timestamp: timestamp,
               );
 
-              // Add to appropriate segment list
               _roadSegments[featureType]?.add(LatLng(latitude, longitude));
-
-              // Add marker
               _addMarker(event);
             });
           });
 
-          // Update polylines
           _updatePolylines();
         });
       }
@@ -401,7 +340,7 @@ class _HomeMapScreenState extends State<HomeMapScreen> {
       case 'smooth':
         return RoadFeatureType.smooth;
       default:
-        return RoadFeatureType.pothole; // Default
+        return RoadFeatureType.pothole;
     }
   }
 
@@ -444,6 +383,15 @@ class _HomeMapScreenState extends State<HomeMapScreen> {
       setState(() {
         _currentLocation = locationData;
 
+        // Pass CustomLocationData to setCurrentLocation
+        _damageDetector.setCurrentLocation(CustomLocationData(
+          latitude: locationData.latitude!,
+          longitude: locationData.longitude!,
+          heading: locationData.heading,
+          speed: locationData.speed,
+          accuracy: locationData.accuracy,
+        ));
+
         if (_firstLocationUpdate) {
           _updateCameraPosition(
             LatLng(locationData.latitude!, locationData.longitude!),
@@ -478,7 +426,8 @@ class _HomeMapScreenState extends State<HomeMapScreen> {
         title: const Text('Road Damage Map'),
         actions: [
           IconButton(
-            icon: Icon(_isAIMode ? Icons.auto_awesome : Icons.auto_awesome_outlined),
+            icon: Icon(
+                _isAIMode ? Icons.auto_awesome : Icons.auto_awesome_outlined),
             tooltip: 'Toggle AI Mode',
             onPressed: _toggleAIMode,
           ),
@@ -502,19 +451,4 @@ class _HomeMapScreenState extends State<HomeMapScreen> {
       ),
     );
   }
-}
-
-// Model class for road feature events
-class RoadFeatureEvent {
-  final RoadFeatureType type;
-  final double latitude;
-  final double longitude;
-  final int timestamp;
-
-  RoadFeatureEvent({
-    required this.type,
-    required this.latitude,
-    required this.longitude,
-    this.timestamp = 0,
-  });
 }
