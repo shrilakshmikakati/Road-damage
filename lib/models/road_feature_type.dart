@@ -1,35 +1,33 @@
 // lib/models/road_feature_type.dart
-import 'package:flutter/material.dart';
 
+/// Enum representing different types of road features that can be detected
 enum RoadFeatureType {
-  pothole,
-  roughPatch,
-  speedBreaker,
-  railwayCrossing,
-  smooth,
+  pothole,        // A hole in the road surface
+  roughPatch,     // A rough or uneven section of road
+  speedBreaker,   // An intentional bump/speed bump
+  railwayCrossing, // A railway crossing
+  smooth          // Normal, smooth road conditions
 }
 
-// Separate class for getting icons - NOT nested inside another class
-class RoadFeatureIcons {
-  static IconData getIcon(RoadFeatureType type) {
-    switch (type) {
-      case RoadFeatureType.pothole:
-        return Icons.warning;
-      case RoadFeatureType.roughPatch:
-        return Icons.waves;
-      case RoadFeatureType.speedBreaker:
-        return Icons.speed;
-      case RoadFeatureType.railwayCrossing:
-        return Icons.train;
-      case RoadFeatureType.smooth:
-        return Icons.check_circle;
+
+extension RoadFeatureTypeExtension on RoadFeatureType {
+
+  static RoadFeatureType fromString(String value) {
+    switch (value.toLowerCase()) {
+      case 'pothole':
+        return RoadFeatureType.pothole;
+      case 'roughpatch':
+        return RoadFeatureType.roughPatch;
+      case 'speedbreaker':
+        return RoadFeatureType.speedBreaker;
+      case 'railwaycrossing':
+        return RoadFeatureType.railwayCrossing;
+      case 'smooth':
+      default:
+        return RoadFeatureType.smooth;
     }
   }
-}
 
-// Extension methods for RoadFeatureType
-extension RoadFeatureTypeExtension on RoadFeatureType {
-  // Display name for UI
   String get displayName {
     switch (this) {
       case RoadFeatureType.pothole:
@@ -45,53 +43,24 @@ extension RoadFeatureTypeExtension on RoadFeatureType {
     }
   }
 
-  // Description for UI
-  String get description {
-    switch (this) {
-      case RoadFeatureType.pothole:
-        return 'Deep holes in the road';
-      case RoadFeatureType.roughPatch:
-        return 'Uneven road surface';
-      case RoadFeatureType.speedBreaker:
-        return 'Intentional bumps to slow traffic';
-      case RoadFeatureType.railwayCrossing:
-        return 'Train tracks crossing road';
-      case RoadFeatureType.smooth:
-        return 'Well maintained road surface';
-    }
-  }
 
-  // Icon for UI
-  IconData get icon {
-    switch (this) {
-      case RoadFeatureType.pothole:
-        return Icons.warning;
-      case RoadFeatureType.roughPatch:
-        return Icons.waves;
-      case RoadFeatureType.speedBreaker:
-        return Icons.speed;
-      case RoadFeatureType.railwayCrossing:
-        return Icons.train;
-      case RoadFeatureType.smooth:
-        return Icons.check_circle;
-    }
-  }
-
-  // Whether this road feature is considered damage
   bool get isDamage {
-    return this == RoadFeatureType.pothole ||
-        this == RoadFeatureType.roughPatch;
+    return this == RoadFeatureType.pothole || this == RoadFeatureType.roughPatch;
   }
 
-  // Parse from string safely
-  static RoadFeatureType fromString(String value) {
-    try {
-      return RoadFeatureType.values.firstWhere(
-            (type) => type.toString().split('.').last == value,
-        orElse: () => RoadFeatureType.smooth,
-      );
-    } catch (_) {
-      return RoadFeatureType.smooth;
+
+  int get color {
+    switch (this) {
+      case RoadFeatureType.pothole:
+        return 0xFFFF0000; // Red
+      case RoadFeatureType.roughPatch:
+        return 0xFFFFA500; // Orange
+      case RoadFeatureType.speedBreaker:
+        return 0xFFFFFF00; // Yellow
+      case RoadFeatureType.railwayCrossing:
+        return 0xFF800080; // Purple
+      case RoadFeatureType.smooth:
+        return 0xFF00FF00; // Green
     }
   }
 }

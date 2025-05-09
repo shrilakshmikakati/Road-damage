@@ -2,7 +2,6 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../provider/settings_provider.dart';
-import 'package:location/location.dart';
 import '../utils/damage_detector.dart';
 import '../services/location_service.dart';
 import '../services/damage_ai_service.dart';
@@ -44,10 +43,9 @@ class _CalibrationScreenState extends State<CalibrationScreen> {
     });
 
     try {
-      // First upload
+
       bool uploadSuccess = await _repository.syncWithCloud(true);
 
-      // Then download
       bool downloadSuccess = await _repository.syncWithCloud(false);
 
       setState(() {
@@ -78,7 +76,7 @@ class _CalibrationScreenState extends State<CalibrationScreen> {
               // Damage Detection section
               _buildSectionHeader('Damage Detection'),
 
-              // Threshold slider
+
               Card(
                 child: Padding(
                   padding: const EdgeInsets.all(16),
@@ -116,7 +114,7 @@ class _CalibrationScreenState extends State<CalibrationScreen> {
 
               SizedBox(height: 16),
 
-              // AI section
+
               _buildSectionHeader('AI Features'),
 
               // AI mode toggle
@@ -144,10 +142,10 @@ class _CalibrationScreenState extends State<CalibrationScreen> {
 
               SizedBox(height: 16),
 
-              // Cloud sync section
+
               _buildSectionHeader('Cloud Sync'),
 
-              // Auto sync toggle
+
               SwitchListTile(
                 title: Text('Auto Sync'),
                 subtitle: Text('Automatically sync data with cloud'),
@@ -155,7 +153,7 @@ class _CalibrationScreenState extends State<CalibrationScreen> {
                 onChanged: (value) => settings.toggleAutoSync(value),
               ),
 
-              // Manual sync button
+
               Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 8.0),
                 child: ElevatedButton(

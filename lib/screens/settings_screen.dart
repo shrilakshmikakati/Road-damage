@@ -46,7 +46,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
         _appVersion = packageInfo.version;
       });
     } catch (e) {
-      // Use default version if unable to get package info
     }
   }
 
@@ -211,7 +210,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     ),
                   ),
 
-                  // Map Settings
+
                   Card(
                     margin: EdgeInsets.only(bottom: 16),
                     child: Padding(
@@ -266,7 +265,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     ),
                   ),
 
-                  // Appearance Settings
+
                   Card(
                     margin: EdgeInsets.only(bottom: 16),
                     child: Padding(
@@ -297,7 +296,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     ),
                   ),
 
-                  // Storage & Sync Settings
+
                   Card(
                     margin: EdgeInsets.only(bottom: 16),
                     child: Padding(
@@ -372,7 +371,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     ),
                   ),
 
-                  // About Section
                   Card(
                     margin: EdgeInsets.only(bottom: 16),
                     child: Padding(
@@ -420,7 +418,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
             },
           ),
 
-          // Loading overlay
           if (_isSyncing)
             Container(
               color: Colors.black26,

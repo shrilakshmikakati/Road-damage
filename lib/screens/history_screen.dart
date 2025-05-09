@@ -36,7 +36,7 @@ class _HistoryScreenState extends State<HistoryScreen> with SingleTickerProvider
       _records = records;
       _isLoading = false;
 
-      // Create markers for map view
+
       _markers = records.map((record) =>
           Marker(
             markerId: MarkerId(record.id),
@@ -157,7 +157,6 @@ class _HistoryScreenState extends State<HistoryScreen> with SingleTickerProvider
       return Center(child: Text('No records yet'));
     }
 
-    // Find center of all points
     double avgLat = 0;
     double avgLng = 0;
 

@@ -40,9 +40,13 @@ class _HomeMapScreenState extends State<HomeMapScreen> {
     RoadFeatureType.smooth: [],
   };
 
+
+  final List<LatLng> _userPath = [];
+
   late DamageDetector _damageDetector;
   final Location _locationService = Location();
   LocationData? _currentLocation;
+  StreamSubscription<LocationData>? _locationSubscription;
 
   bool _isTracking = false;
   bool _firstLocationUpdate = true;
@@ -62,9 +66,9 @@ class _HomeMapScreenState extends State<HomeMapScreen> {
   void initState() {
     super.initState();
 
-    final DamageDetector _damageDetector = DamageDetector(
-      aiService: DamageAIService(),
-      locationService: LocationServiceImpl()
+    _damageDetector = DamageDetector(
+        aiService: DamageAIService(),
+        locationService: LocationServiceImpl()
     );
     _initializeApp();
   }
@@ -76,12 +80,39 @@ class _HomeMapScreenState extends State<HomeMapScreen> {
 
     _damageDetector.addRoadFeatureEventListener((event) {
       _handleRoadFeatureEvent(event);
-      return event;
     });
 
+    await _requestLocationPermission();
     await _getCurrentLocation();
-    _loadSavedRoadData();
+    await _loadSavedRoadData();
     _isAIMode = _damageDetector.isAIEnabled;
+  }
+
+  Future<void> _requestLocationPermission() async {
+    bool _serviceEnabled;
+    PermissionStatus _permissionGranted;
+
+    _serviceEnabled = await _locationService.serviceEnabled();
+    if (!_serviceEnabled) {
+      _serviceEnabled = await _locationService.requestService();
+      if (!_serviceEnabled) {
+        return;
+      }
+    }
+
+    _permissionGranted = await _locationService.hasPermission();
+    if (_permissionGranted == PermissionStatus.denied) {
+      _permissionGranted = await _locationService.requestPermission();
+      if (_permissionGranted != PermissionStatus.granted) {
+        return;
+      }
+    }
+
+    await _locationService.changeSettings(
+      accuracy: LocationAccuracy.high,
+      interval: 1000,
+      distanceFilter: 5,
+    );
   }
 
   void _handleRoadFeatureEvent(RoadFeatureEvent event) {
@@ -154,21 +185,40 @@ class _HomeMapScreenState extends State<HomeMapScreen> {
     try {
       _currentLocation = await _locationService.getLocation();
       if (_currentLocation != null) {
-        _updateCameraPosition(
-            LatLng(_currentLocation!.latitude!, _currentLocation!.longitude!));
+        setState(() {
+          _initialCameraPosition = CameraPosition(
+            target: LatLng(_currentLocation!.latitude!, _currentLocation!.longitude!),
+            zoom: 17.0,
+          );
+        });
       }
     } catch (e) {
       debugPrint('Error getting location: $e');
     }
   }
 
+  void _relocateToCurrentPosition() async {
+    if (_currentLocation != null) {
+      _updateCameraPosition(
+        LatLng(_currentLocation!.latitude!, _currentLocation!.longitude!),
+      );
+    } else {
+      await _getCurrentLocation();
+    }
+  }
+
   void _updateCameraPosition(LatLng position) async {
-    final GoogleMapController controller = await _controller.future;
-    CameraPosition newPosition = CameraPosition(
-      target: position,
-      zoom: 17.0,
-    );
-    controller.animateCamera(CameraUpdate.newCameraPosition(newPosition));
+    try {
+      final GoogleMapController controller = await _controller.future;
+      CameraPosition newPosition = CameraPosition(
+        target: position,
+        zoom: 17.0,
+        tilt: 45.0, // Add tilt for better navigation view
+      );
+      controller.animateCamera(CameraUpdate.newCameraPosition(newPosition));
+    } catch (e) {
+      debugPrint('Error updating camera position: $e');
+    }
   }
 
   void _addMarker(RoadFeatureEvent event) {
@@ -210,6 +260,18 @@ class _HomeMapScreenState extends State<HomeMapScreen> {
 
   void _updatePolylines() {
     _polylines.clear();
+
+    // Add user path polyline
+    if (_userPath.length > 1) {
+      _polylines.add(
+        Polyline(
+          polylineId: const PolylineId('user_path'),
+          color: Colors.green,
+          width: 5,
+          points: _userPath,
+        ),
+      );
+    }
 
     if (_roadSegments[RoadFeatureType.pothole]!.isNotEmpty) {
       _polylines.add(
@@ -379,24 +441,40 @@ class _HomeMapScreenState extends State<HomeMapScreen> {
 
   void _startTracking() {
     _damageDetector.startDetection();
-    _locationService.onLocationChanged.listen((LocationData locationData) {
+
+
+    _locationSubscription?.cancel();
+
+
+    _locationSubscription = _locationService.onLocationChanged.listen((LocationData locationData) {
+      if (!mounted) return;
+
       setState(() {
         _currentLocation = locationData;
 
-        // Pass CustomLocationData to setCurrentLocation
-        _damageDetector.setCurrentLocation(CustomLocationData(
-          latitude: locationData.latitude!,
-          longitude: locationData.longitude!,
-          heading: locationData.heading,
-          speed: locationData.speed,
-          accuracy: locationData.accuracy,
-        ));
 
-        if (_firstLocationUpdate) {
-          _updateCameraPosition(
-            LatLng(locationData.latitude!, locationData.longitude!),
-          );
-          _firstLocationUpdate = false;
+        if (locationData.latitude != null && locationData.longitude != null) {
+          LatLng currentPosition = LatLng(locationData.latitude!, locationData.longitude!);
+
+
+          _userPath.add(currentPosition);
+
+
+          _damageDetector.setCurrentLocation(CustomLocationData(
+            latitude: locationData.latitude!,
+            longitude: locationData.longitude!,
+            heading: locationData.heading,
+            speed: locationData.speed,
+            accuracy: locationData.accuracy,
+          ));
+
+          // Update polylines to show the path
+          _updatePolylines();
+
+          if (_firstLocationUpdate) {
+            _updateCameraPosition(currentPosition);
+            _firstLocationUpdate = false;
+          }
         }
       });
     });
@@ -404,6 +482,7 @@ class _HomeMapScreenState extends State<HomeMapScreen> {
 
   void _stopTracking() {
     _damageDetector.stopDetection();
+    _locationSubscription?.cancel();
   }
 
   void _toggleAIMode() {
@@ -415,8 +494,103 @@ class _HomeMapScreenState extends State<HomeMapScreen> {
 
   @override
   void dispose() {
+    _locationSubscription?.cancel();
     _damageDetector.dispose();
     super.dispose();
+  }
+
+  Widget _buildLegendPanel() {
+    return Positioned(
+      top: 10,
+      left: 10,
+      child: Container(
+        padding: const EdgeInsets.all(8),
+        decoration: BoxDecoration(
+          color: Colors.black.withOpacity(0.7),
+          borderRadius: BorderRadius.circular(8),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Text(
+              'Legend:',
+              style: TextStyle(
+                color: Colors.white,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+            const SizedBox(height: 4),
+            _legendItem('Potholes', Colors.red),
+            _legendItem('Speed Breakers', Colors.orange),
+            _legendItem('Rough Patches', Colors.amber),
+            _legendItem('Railway Crossings', Colors.purple),
+            _legendItem('Smooth Roads', Colors.blue),
+            _legendItem('Your Path', Colors.green),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _legendItem(String text, Color color) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 2),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Container(
+            width: 16,
+            height: 3,
+            color: color,
+          ),
+          const SizedBox(width: 8),
+          Text(
+            text,
+            style: const TextStyle(
+              color: Colors.white,
+              fontSize: 12,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildStatusPanel() {
+    return Positioned(
+      bottom: 80,
+      left: 10,
+      child: Container(
+        padding: const EdgeInsets.all(8),
+        decoration: BoxDecoration(
+          color: Colors.black.withOpacity(0.7),
+          borderRadius: BorderRadius.circular(8),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+              'Markers: ${_markers.length}',
+              style: const TextStyle(color: Colors.white, fontSize: 12),
+            ),
+            Text(
+              'Path Points: ${_userPath.length}',
+              style: const TextStyle(color: Colors.white, fontSize: 12),
+            ),
+            Text(
+              'Tracking: ${_isTracking ? "ON" : "OFF"}',
+              style: TextStyle(
+                color: _isTracking ? Colors.green : Colors.red,
+                fontSize: 12,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 
   @override
@@ -433,21 +607,52 @@ class _HomeMapScreenState extends State<HomeMapScreen> {
           ),
         ],
       ),
-      body: GoogleMap(
-        mapType: MapType.normal,
-        initialCameraPosition: _initialCameraPosition,
-        onMapCreated: (GoogleMapController controller) {
-          _controller.complete(controller);
-        },
-        myLocationEnabled: true,
-        myLocationButtonEnabled: true,
-        markers: _markers,
-        polylines: _polylines,
+      body: Stack(
+        children: [
+          GoogleMap(
+            mapType: MapType.normal,
+            initialCameraPosition: _initialCameraPosition,
+            onMapCreated: (GoogleMapController controller) {
+              _controller.complete(controller);
+            },
+            myLocationEnabled: true,
+            myLocationButtonEnabled: false, // Disable default button
+            markers: _markers,
+            polylines: _polylines,
+          ),
+          _buildLegendPanel(),
+          _buildStatusPanel(),
+        ],
       ),
-      floatingActionButton: FloatingActionButton.extended(
-        onPressed: _toggleTracking,
-        label: Text(_isTracking ? 'Stop Tracking' : 'Start Tracking'),
-        icon: Icon(_isTracking ? Icons.pause : Icons.play_arrow),
+      floatingActionButtonLocation: FloatingActionButtonLocation.centerFloat,
+      floatingActionButton: Container(
+        margin: const EdgeInsets.only(bottom: 16),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            FloatingActionButton(
+              heroTag: "relocateBtn",
+              onPressed: _relocateToCurrentPosition,
+              backgroundColor: Colors.blue,
+              child: const Icon(Icons.my_location),
+              mini: true,
+            ),
+            const SizedBox(width: 16),
+            ElevatedButton.icon(
+              onPressed: _toggleTracking,
+              icon: Icon(_isTracking ? Icons.stop : Icons.play_arrow),
+              label: Text(_isTracking ? 'Stop Tracking' : 'Start Tracking'),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: _isTracking ? Colors.red : Colors.blue,
+                foregroundColor: Colors.white,
+                padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(30),
+                ),
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }

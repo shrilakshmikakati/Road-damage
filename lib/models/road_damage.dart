@@ -1,5 +1,4 @@
 // lib/models/road_damage.dart
-// Updated to use the unified RoadFeatureType
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'road_feature_type.dart';
@@ -23,7 +22,7 @@ class RoadDamage {
     this.verified,
   });
 
-  // Create a RoadDamage from a Map
+
   factory RoadDamage.fromMap(Map<String, dynamic> map, String documentId) {
     return RoadDamage(
       id: documentId,
@@ -39,7 +38,7 @@ class RoadDamage {
     );
   }
 
-  // Convert RoadDamage to a Map
+
   Map<String, dynamic> toMap() {
     return {
       'type': type.toString().split('.').last,

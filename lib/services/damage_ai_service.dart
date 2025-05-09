@@ -69,18 +69,14 @@ class DamageAIService implements AIService {
   static const int _bufferSize = 50; // Number of motion samples to keep
 
 
-
-  // Motion data buffer
   final List<MotionData> _motionBuffer = [];
 
-  // Training data
   List<Map<String, dynamic>> _trainingExamples = [];
 
-  // Model state
+
   bool _isModelTrained = false;
   int _trainingExampleCount = 0;
 
-  // Initialize the service
   @override
   Future<void> initialize() async {
     await _loadTrainingData();
@@ -89,7 +85,6 @@ class DamageAIService implements AIService {
 
   }
 
-  // Load training data from storage
   Future<void> _loadTrainingData() async {
     try {
       final prefs = await SharedPreferences.getInstance();
@@ -109,7 +104,6 @@ class DamageAIService implements AIService {
     }
   }
 
-  // Load model data from storage
   Future<void> _loadModelData() async {
     try {
       final prefs = await SharedPreferences.getInstance();
@@ -127,7 +121,6 @@ class DamageAIService implements AIService {
     }
   }
 
-  // Save training data to storage
   Future<void> _saveTrainingData() async {
     try {
       final prefs = await SharedPreferences.getInstance();
@@ -143,7 +136,6 @@ class DamageAIService implements AIService {
     }
   }
 
-  // Save model data to storage
   Future<void> _saveModelData(Map<String, dynamic> modelData) async {
     try {
       final prefs = await SharedPreferences.getInstance();
@@ -156,7 +148,6 @@ class DamageAIService implements AIService {
     }
   }
 
-  // Add motion data to buffer
   @override
   void addMotionData(MotionData data) {
     _motionBuffer.add(data);
@@ -167,7 +158,6 @@ class DamageAIService implements AIService {
     }
   }
 
-  // Analyze current motion buffer
   @override
   AnalysisResult analyzeCurrentBuffer(LatLng position) {
     if (_motionBuffer.isEmpty) {
@@ -178,7 +168,6 @@ class DamageAIService implements AIService {
       );
     }
 
-    // Calculate features from buffer
     final features = _calculateFeatures();
 
     // If model is trained, use it
@@ -186,11 +175,10 @@ class DamageAIService implements AIService {
       return _predictWithModel(features);
     }
 
-    // Fallback to simple analysis
     return _simpleAnalysis(features);
   }
 
-  // Calculate features from motion buffer
+
   Map<String, dynamic> _calculateFeatures() {
     if (_motionBuffer.isEmpty) {
       return {
@@ -204,7 +192,6 @@ class DamageAIService implements AIService {
       };
     }
 
-    // Calculate mean values
     double sumX = 0, sumY = 0, sumZ = 0;
     double maxMag = 0;
 
@@ -213,7 +200,6 @@ class DamageAIService implements AIService {
       sumY += data.accelerationY;
       sumZ += data.accelerationZ;
 
-      // Calculate magnitude
       double mag = math.sqrt(
           data.accelerationX * data.accelerationX +
               data.accelerationY * data.accelerationY +
@@ -227,7 +213,7 @@ class DamageAIService implements AIService {
     double meanY = sumY / _motionBuffer.length;
     double meanZ = sumZ / _motionBuffer.length;
 
-    // Calculate standard deviations
+
     double varX = 0, varY = 0, varZ = 0;
 
     for (var data in _motionBuffer) {
@@ -251,7 +237,6 @@ class DamageAIService implements AIService {
     };
   }
 
-  // Simple analysis without ML model
   AnalysisResult _simpleAnalysis(Map<String, dynamic> features) {
     final maxMag = features['max_accel_magnitude'];
     final stdZ = features['std_accel_z'];
@@ -284,10 +269,9 @@ class DamageAIService implements AIService {
     );
   }
 
-  // Predict with ML model
+
   AnalysisResult _predictWithModel(Map<String, dynamic> features) {
-    // In a real app, this would use TensorFlow Lite or similar
-    // For now, we'll just do a simple prediction
+
 
     final maxMag = features['max_accel_magnitude'];
     final stdZ = features['std_accel_z'];
@@ -327,7 +311,6 @@ class DamageAIService implements AIService {
     );
   }
 
-  // Add a training example
   @override
   Future<void> addTrainingExample(RoadFeatureType type, LatLng position) async {
     final features = _calculateFeatures();
@@ -346,20 +329,17 @@ class DamageAIService implements AIService {
     await _saveTrainingData();
   }
 
-  // Get features for new training example
   @override
   Future<Map<String, dynamic>> getMotionFeatures() async {
     return _calculateFeatures();
   }
 
-  // Update training example count
   @override
   void updateTrainingExampleCount(int count) {
     _trainingExampleCount = count;
     _saveTrainingData();
   }
 
-  // Train model with provided data
   @override
   Future<bool> trainModel(List<Map<String, dynamic>> examples) async {
     try {
@@ -367,12 +347,10 @@ class DamageAIService implements AIService {
       // For now, just simulate training
       await Future.delayed(const Duration(seconds: 2));
 
-      // Update training examples with new data
       _trainingExamples = List.from(examples);
       _trainingExampleCount = examples.length;
       await _saveTrainingData();
 
-      // Create simple model data
       final modelData = {
         'version': '1.0',
         'trained_at': DateTime.now().millisecondsSinceEpoch,
@@ -391,7 +369,6 @@ class DamageAIService implements AIService {
     }
   }
 
-  // Export trained model data
   @override
   Future<Map<String, dynamic>> exportModelData() async {
     // In a real app, this would export model weights or parameters
@@ -404,7 +381,7 @@ class DamageAIService implements AIService {
     };
   }
 
-  // Clear all training data
+
   @override
   Future<void> clearTrainingData() async {
     _trainingExamples = [];
@@ -417,11 +394,9 @@ class DamageAIService implements AIService {
     await prefs.remove(_modelDataKey);
   }
 
-  // Get training example count
   int get trainingExampleCount => _trainingExampleCount;
 }
 
-// Add this to the file if it's missing
 abstract class AIService {
   void addMotionData(MotionData data);
   AnalysisResult analyzeCurrentBuffer(LatLng position);
@@ -431,5 +406,5 @@ abstract class AIService {
   Future<bool> trainModel(List<Map<String, dynamic>> examples);
   Future<Map<String, dynamic>> exportModelData();
   Future<void> clearTrainingData();
-  Future<void> initialize() async {} // Provide a default empty implementation
+  Future<void> initialize() async {}
 }

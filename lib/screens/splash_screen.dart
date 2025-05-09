@@ -40,7 +40,6 @@ class _SplashScreenState extends State<SplashScreen> with SingleTickerProviderSt
 
     _animationController.forward();
 
-    // Begin permission check after a short delay
     Timer(const Duration(seconds: 1), () {
       _checkAndRequestPermissions();
     });
@@ -51,7 +50,6 @@ class _SplashScreenState extends State<SplashScreen> with SingleTickerProviderSt
       _statusMessage = "Checking permissions...";
     });
 
-    // Check each permission status
     Map<Permission, PermissionStatus> statuses = await _requiredPermissions.request();
 
     bool allGranted = true;
@@ -69,7 +67,6 @@ class _SplashScreenState extends State<SplashScreen> with SingleTickerProviderSt
           : "Some permissions were denied. App may not work properly.";
     });
 
-    // Wait a moment before navigating
     Timer(const Duration(seconds: 2), () {
       Navigator.of(context).pushReplacementNamed(HomeMapScreen.routeName);
     });
@@ -90,7 +87,7 @@ class _SplashScreenState extends State<SplashScreen> with SingleTickerProviderSt
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              // App logo with fade in animation
+
               FadeTransition(
                 opacity: _animation,
                 child: Container(
@@ -109,7 +106,7 @@ class _SplashScreenState extends State<SplashScreen> with SingleTickerProviderSt
                   ),
                   child: Center(
                     child: Icon(
-                      Icons.add_road, // Changed from Icons.road to Icons.add_road which exists
+                      Icons.add_road,
                       size: 80,
                       color: Theme.of(context).primaryColor,
                     ),
@@ -119,11 +116,10 @@ class _SplashScreenState extends State<SplashScreen> with SingleTickerProviderSt
 
               const SizedBox(height: 40),
 
-              // App name with scale animation
               ScaleTransition(
                 scale: _animation,
                 child: const Text(
-                  "Road Damage Detector",
+                  "BumpAlert",
                   style: TextStyle(
                     fontSize: 28,
                     fontWeight: FontWeight.bold,
@@ -134,7 +130,6 @@ class _SplashScreenState extends State<SplashScreen> with SingleTickerProviderSt
 
               const SizedBox(height: 20),
 
-              // Status message
               Text(
                 _statusMessage,
                 style: const TextStyle(
@@ -145,14 +140,12 @@ class _SplashScreenState extends State<SplashScreen> with SingleTickerProviderSt
 
               const SizedBox(height: 40),
 
-              // Loading indicator
               const CircularProgressIndicator(
                 valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
               ),
 
               const SizedBox(height: 20),
 
-              // Permission indicators
               if (_permissionsChecked)
                 Row(
                   mainAxisAlignment: MainAxisAlignment.center,

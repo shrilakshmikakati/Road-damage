@@ -8,18 +8,16 @@ class CloudSyncService {
   final DatabaseReference _database = FirebaseDatabase.instance.ref();
   String? _userId;
 
-  // Initialize the service
   Future<void> initialize() async {
     await _getUserId();
   }
 
-  // Get or create a user ID for this device
   Future<void> _getUserId() async {
     final prefs = await SharedPreferences.getInstance();
     String? userId = prefs.getString(_userIdKey);
 
     if (userId == null) {
-      // Generate a new user ID if none exists
+
       userId = DateTime.now().millisecondsSinceEpoch.toString();
       await prefs.setString(_userIdKey, userId);
     }
@@ -27,7 +25,6 @@ class CloudSyncService {
     _userId = userId;
   }
 
-  // Upload a single damage record to Firebase
   Future<bool> uploadRecord(DamageRecord record) async {
     if (_userId == null) {
       await _getUserId();
@@ -42,7 +39,6 @@ class CloudSyncService {
     }
   }
 
-  // Upload all records to Firebase
   Future<bool> uploadAllRecords(List<DamageRecord> records) async {
     if (_userId == null) {
       await _getUserId();
@@ -63,7 +59,6 @@ class CloudSyncService {
     }
   }
 
-  // Download all records from Firebase
   Future<List<DamageRecord>> downloadRecords() async {
     if (_userId == null) {
       await _getUserId();
@@ -89,7 +84,6 @@ class CloudSyncService {
     }
   }
 
-  // Delete all records from Firebase
   Future<bool> deleteAllRecords() async {
     if (_userId == null) {
       await _getUserId();

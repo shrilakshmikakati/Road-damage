@@ -17,7 +17,7 @@ class DamageRecord {
     required this.isDamaged,
   });
 
-  // Convert to and from JSON for storage
+
   Map<String, dynamic> toJson() {
     return {
       'id': id,

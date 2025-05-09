@@ -7,10 +7,9 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import '../models/road_feature_type.dart';
 import '../models/custom_location_data.dart';
-import '../services/damage_ai_service.dart'; // Added for AIService
+import '../services/damage_ai_service.dart';
 
 
-// RoadFeatureEvent class
 class RoadFeatureEvent {
   final RoadFeatureType type;
   final double latitude;
@@ -34,7 +33,7 @@ class RoadFeatureEvent {
   }
 }
 
-// Motion data class for sensor readings
+
 class MotionData {
   final double accelerationX;
   final double accelerationY;
@@ -54,7 +53,6 @@ class MotionData {
     required this.timestamp,
   });
 
-  // Calculate the magnitude of acceleration
   double get accelerationMagnitude {
     return math.sqrt(
         math.pow(accelerationX, 2) +
@@ -63,7 +61,7 @@ class MotionData {
     );
   }
 
-  // Calculate the magnitude of gyroscope reading
+
   double get gyroscopeMagnitude {
     return math.sqrt(
         math.pow(gyroX, 2) +
@@ -97,7 +95,7 @@ class MotionData {
   }
 }
 
-// Training example class for ML model
+
 class TrainingExample {
   final List<MotionData> motionSequence;
   final RoadFeatureType featureType;
@@ -127,11 +125,10 @@ class TrainingExample {
     );
   }
 
-  // Extract features from this training example
+
   List<double> extractFeatures() {
     if (motionSequence.isEmpty) return List.filled(10, 0.0);
 
-    // Calculate features
     double avgAccel = _calculateAverage(
         motionSequence.map((m) => m.accelerationMagnitude).toList()
     );
@@ -151,7 +148,7 @@ class TrainingExample {
         .difference(motionSequence.first.timestamp).inMilliseconds;
     double durationSec = durationMs / 1000.0;
 
-    // Return feature vector
+
     return [
       avgAccel,
       peakAccel,
@@ -159,14 +156,14 @@ class TrainingExample {
       peakGyro,
       symmetry,
       durationSec,
-      peakAccel / avgAccel, // peak-to-average ratio
-      avgGyro / avgAccel,   // gyro-to-accel ratio
-      durationSec * avgAccel, // energy proxy
-      motionSequence.length.toDouble() // sample count
+      peakAccel / avgAccel,
+      avgGyro / avgAccel,
+      durationSec * avgAccel,
+      motionSequence.length.toDouble()
     ];
   }
 
-  // Helper methods for feature extraction
+
   double _calculateAverage(List<double> values) {
     if (values.isEmpty) return 0.0;
     return values.reduce((a, b) => a + b) / values.length;
@@ -198,7 +195,7 @@ class TrainingExample {
   }
 }
 
-// Classification result
+
 class ClassificationResult {
   final RoadFeatureType featureType;
   final double confidence;
@@ -215,18 +212,16 @@ class ClassificationResult {
   });
 }
 
-// Feature extractor interface
+
 abstract class FeatureExtractor {
   List<double> extractFeatures(List<MotionData> motionData);
 }
 
-// Simple feature extractor implementation
 class SimpleFeatureExtractor implements FeatureExtractor {
   @override
   List<double> extractFeatures(List<MotionData> motionData) {
     if (motionData.isEmpty) return List.filled(10, 0.0);
 
-    // Calculate average and peak magnitudes
     double avgAccel = 0;
     double maxAccel = 0;
     double avgGyro = 0;
@@ -246,16 +241,15 @@ class SimpleFeatureExtractor implements FeatureExtractor {
     avgAccel /= motionData.length;
     avgGyro /= motionData.length;
 
-    // Calculate pattern features
     int durationMs = motionData.last.timestamp
         .difference(motionData.first.timestamp).inMilliseconds;
     double durationSec = durationMs / 1000.0;
 
-    // Calculate symmetry
+
     List<double> accelProfile = motionData.map((m) => m.accelerationMagnitude).toList();
     double symmetry = _calculateSymmetry(accelProfile);
 
-    // Return feature vector
+
     return [
       avgAccel,
       maxAccel,
@@ -263,14 +257,13 @@ class SimpleFeatureExtractor implements FeatureExtractor {
       maxGyro,
       symmetry,
       durationSec,
-      maxAccel / (avgAccel > 0 ? avgAccel : 1.0), // peak-to-average ratio
-      avgGyro / (avgAccel > 0 ? avgAccel : 1.0),  // gyro-to-accel ratio
-      durationSec * avgAccel, // energy proxy
-      motionData.length.toDouble() // sample count
+      maxAccel / (avgAccel > 0 ? avgAccel : 1.0),
+      avgGyro / (avgAccel > 0 ? avgAccel : 1.0),
+      durationSec * avgAccel,
+      motionData.length.toDouble()
     ];
   }
 
-  // Calculate symmetry of signal (0 = asymmetric, 1 = symmetric)
   double _calculateSymmetry(List<double> signal) {
     if (signal.length < 2) return 1.0;
 
@@ -292,15 +285,14 @@ class SimpleFeatureExtractor implements FeatureExtractor {
   }
 }
 
-// Classifier interface
+
 abstract class Classifier {
   Future<ClassificationResult> classify(List<double> features);
   Future<void> train(List<TrainingExample> examples);
 }
 
-// Threshold-based classifier implementation
 class ThresholdClassifier implements Classifier {
-  // Thresholds for different types of road features
+
   Map<RoadFeatureType, double> _thresholds = {
     RoadFeatureType.pothole: 2.0,
     RoadFeatureType.speedBreaker: 1.5,
@@ -309,7 +301,7 @@ class ThresholdClassifier implements Classifier {
     RoadFeatureType.smooth: 0.0,
   };
 
-  // Classification weights for each feature
+
 
 
   @override
@@ -326,42 +318,36 @@ class ThresholdClassifier implements Classifier {
       );
     }
 
-    // Weighted score for acceleration magnitude (most important feature)
-    double severity = features[1]; // Using peak acceleration as severity
 
-    // Calculate scores for each road feature type
+    double severity = features[1];
+
+
     Map<RoadFeatureType, double> scores = {};
 
-    // Pothole scoring (high peak accel, low symmetry, short duration)
     scores[RoadFeatureType.pothole] =
         features[1] * 0.5 + // peak accel
             (1.0 - features[4]) * 0.3 + // asymmetry (1 - symmetry)
             (1.0 - math.min(features[5] / 0.5, 1.0)) * 0.2; // short duration
 
-    // Speed breaker scoring (high avg accel, high symmetry, medium duration)
     scores[RoadFeatureType.speedBreaker] =
         features[0] * 0.4 + // avg accel
             features[4] * 0.4 + // symmetry
             math.min(features[5] / 1.0, 1.0) * 0.2; // medium duration
 
-    // Railway crossing scoring (medium peak, high duration, medium symmetry)
     scores[RoadFeatureType.railwayCrossing] =
         features[1] * 0.3 + // peak accel
             math.min(features[5] / 1.5, 1.0) * 0.5 + // longer duration
             features[4] * 0.2; // symmetry
 
-    // Rough patch scoring (low peak, long duration, low symmetry)
     scores[RoadFeatureType.roughPatch] =
         math.min(features[0] / 1.0, 1.0) * 0.3 + // moderate avg accel
             math.min(features[5] / 2.0, 1.0) * 0.5 + // long duration
             (1.0 - features[4]) * 0.2; // asymmetry
 
-    // Smooth road scoring (low everything)
     scores[RoadFeatureType.smooth] =
         (1.0 - math.min(features[0] / 0.5, 1.0)) * 0.5 + // low avg accel
             (1.0 - math.min(features[1] / 1.0, 1.0)) * 0.5; // low peak accel
 
-    // Normalize scores to sum to 1.0 (probabilities)
     double totalScore = scores.values.reduce((a, b) => a + b);
     Map<RoadFeatureType, double> probabilities = {};
 
@@ -370,13 +356,12 @@ class ThresholdClassifier implements Classifier {
         probabilities[type] = scores[type]! / totalScore;
       }
     } else {
-      // Default to smooth if all scores are 0
+
       for (var type in RoadFeatureType.values) {
         probabilities[type] = type == RoadFeatureType.smooth ? 1.0 : 0.0;
       }
     }
 
-    // Find the highest scoring feature type
     RoadFeatureType bestType = RoadFeatureType.smooth;
     double bestScore = 0.0;
 
@@ -387,10 +372,8 @@ class ThresholdClassifier implements Classifier {
       }
     }
 
-    // Calculate confidence (normalized score)
     double confidence = probabilities[bestType] ?? 0.0;
 
-    // Determine if it's damaged (any non-smooth feature type)
     bool isDamaged = bestType != RoadFeatureType.smooth;
 
     return ClassificationResult(
@@ -406,56 +389,47 @@ class ThresholdClassifier implements Classifier {
   Future<void> train(List<TrainingExample> examples) async {
     if (examples.isEmpty) return;
 
-    // Group examples by feature type
     Map<RoadFeatureType, List<List<double>>> featuresByType = {};
 
     for (var type in RoadFeatureType.values) {
       featuresByType[type] = [];
     }
 
-    // Extract features for each example
     for (var example in examples) {
       List<double> features = example.extractFeatures();
       featuresByType[example.featureType]!.add(features);
     }
 
-    // Update thresholds based on average peak acceleration (feature index 1)
     for (var type in RoadFeatureType.values) {
       if (type == RoadFeatureType.smooth || featuresByType[type]!.isEmpty) continue;
 
-      // Calculate average peak acceleration for this type
       double sum = 0.0;
       for (var features in featuresByType[type]!) {
-        sum += features[1]; // peak acceleration
+        sum += features[1];
       }
       double avg = sum / featuresByType[type]!.length;
 
-      // Update threshold with some margin
-      _thresholds[type] = avg * 0.9; // 90% of average peak
+      _thresholds[type] = avg * 0.9;
     }
   }
 }
 
-// Service interfaces
 
 
 abstract class LocationService {
   Future<CustomLocationData> getLocation();
 }
 
-// And all methods that use LocationData should use CustomLocationData instead:
 CustomLocationData? _currentLocation;
 
 void setCurrentLocation(CustomLocationData location) {
   _currentLocation = location;
 }
 
-// Type for the event callback
 typedef RoadFeatureEventCallback = void Function(RoadFeatureEvent event);
 
-// Main DamageDetector class
 class DamageDetector extends ChangeNotifier {
-  // Service dependencies
+
   final AIService _aiService;
   final LocationService _locationService;
 
@@ -482,14 +456,12 @@ class DamageDetector extends ChangeNotifier {
   List<Function(RoadFeatureEvent)> _roadFeatureEventListeners = [];
   CustomLocationData? _currentLocation;
 
-  // Constructor with required services
   DamageDetector({
     required AIService aiService,
     required LocationService locationService,
   }) : _aiService = aiService,
         _locationService = locationService;
 
-  // Getters
   int get trainingExampleCount => _trainingData.length;
   List<ClassificationResult> get recentDetections => List.unmodifiable(_recentDetections);
   List<TrainingExample> get trainingData => List.unmodifiable(_trainingData);
@@ -502,57 +474,48 @@ class DamageDetector extends ChangeNotifier {
     await _loadTrainingData();
   }
 
-  // Start detection method
   void startDetection() {
     _isDetecting = true;
     debugPrint('Road damage detection started');
     notifyListeners();
   }
 
-  // Stop detection method
   void stopDetection() {
     _isDetecting = false;
     debugPrint('Road damage detection stopped');
     notifyListeners();
   }
 
-  // Start monitoring method
   void startMonitoring() {
     _isMonitoring = true;
     debugPrint('Motion monitoring started');
     notifyListeners();
   }
 
-  // Stop monitoring method
   void stopMonitoring() {
     _isMonitoring = false;
     debugPrint('Motion monitoring stopped');
     notifyListeners();
   }
 
-  // Method to set AI mode
   void setAIMode(bool enabled) {
     _isAIEnabled = enabled;
     debugPrint('AI mode set to: $enabled');
     notifyListeners();
   }
 
-  // Set current location method
   void setCurrentLocation(CustomLocationData location) {
     _currentLocation = location;
   }
 
-  // Add road feature event listener method
   void addRoadFeatureEventListener(Function(RoadFeatureEvent) listener) {
     _roadFeatureEventListeners.add(listener);
   }
 
-  // Remove specific road feature event listener
   void removeRoadFeatureEventListener(Function(RoadFeatureEvent) listener) {
     _roadFeatureEventListeners.remove(listener);
   }
 
-  // Method to notify listeners about road damage events
   void _notifyRoadDamageEvent(RoadFeatureEvent event) {
     for (var listener in _roadFeatureEventListeners) {
       listener(event);
@@ -625,7 +588,7 @@ class DamageDetector extends ChangeNotifier {
 
     List<double> features = _featureExtractor.extractFeatures(_currentMotionBuffer);
 
-    // Synchronous return fallback
+
     return _defaultSmoothResult();
   }
 
@@ -702,7 +665,7 @@ class DamageDetector extends ChangeNotifier {
         _recentDetections.removeAt(0);
       }
 
-      // Create a road damage event and notify listeners
+
       if (_currentLocation != null) {
         final event = RoadFeatureEvent(
           type: result.featureType,
@@ -783,13 +746,11 @@ class DamageDetector extends ChangeNotifier {
     return await _classifier.classify(features);
   }
 
-  // Update training example count - formerly floating function
   void updateTrainingExampleCount(int count) {
     _aiService.updateTrainingExampleCount(count);
     notifyListeners();
   }
 
-  // Collect training example - formerly floating function
   Future<Map<String, dynamic>> collectTrainingExample() async {
     if (_currentLocation == null) {
       await _locationService.getLocation().then((location) {
@@ -797,41 +758,35 @@ class DamageDetector extends ChangeNotifier {
       });
     }
 
-    // Ensure we have some motion data
     if (!_isMonitoring) {
       // Collect a brief sample of motion data
       await _startBriefSampling();
     }
 
-    // Get the latest motion buffer from AI service
     final features = await _aiService.getMotionFeatures();
 
     return features;
   }
 
-  // Brief sampling of motion data - formerly floating function
   Future<void> _startBriefSampling() async {
-    // Store original monitoring state
     final wasMonitoring = _isMonitoring;
 
-    // Start monitoring if not already active
     if (!_isMonitoring) {
       startMonitoring();
     }
 
-    // Wait for enough data (about 2 seconds)
     await Future.delayed(const Duration(seconds: 2));
 
-    // Return to original state if we weren't monitoring before
+
     if (!wasMonitoring) {
       stopMonitoring();
     }
   }
 
-  // Train model with provided data - formerly floating function
+
   Future<bool> trainModelWithData(List<Map<String, dynamic>> examples) async {
     try {
-      // Pass the examples to the AI service for training
+
       final success = await _aiService.trainModel(examples);
       return success;
     } catch (e) {
@@ -842,11 +797,9 @@ class DamageDetector extends ChangeNotifier {
     }
   }
 
-// Export trained model data - formerly floating function
-// Export trained model data - formerly floating function
   Future<Map<String, dynamic>> exportTrainedModelData() async {
     try {
-      // Get model data from the AI service
+
       final modelData = await _aiService.exportModelData();
       return modelData;
     } catch (e) {
@@ -857,7 +810,6 @@ class DamageDetector extends ChangeNotifier {
     }
   }
 
-  // Clear existing training data - formerly floating function
   Future<void> clearExistingTrainingData() async {
     try {
       await _aiService.clearTrainingData();
@@ -869,7 +821,7 @@ class DamageDetector extends ChangeNotifier {
     }
   }
 
-  // Get current location
+
   Future<CustomLocationData> getCurrentLocation() async {
     if (_currentLocation == null) {
       _currentLocation = await _locationService.getLocation();
@@ -877,7 +829,7 @@ class DamageDetector extends ChangeNotifier {
     return _currentLocation!;
   }
 
-  // Check if there's enough motion data for classification
+
   bool hasEnoughDataForClassification() {
     return _currentMotionBuffer.length >= _minEventSamplesRequired;
   }
@@ -890,13 +842,13 @@ class DamageDetector extends ChangeNotifier {
 
     ClassificationResult result = await analyzeCurrentBufferAsync();
 
-    if (result.confidence > 0.4) { // Lower threshold for forced classification
+    if (result.confidence > 0.4) {
       _recentDetections.add(result);
       if (_recentDetections.length > _maxRecentDetections) {
         _recentDetections.removeAt(0);
       }
 
-      // Get current location if not available
+
       if (_currentLocation == null) {
         _currentLocation = await _locationService.getLocation();
       }
@@ -916,7 +868,7 @@ class DamageDetector extends ChangeNotifier {
     return null;
   }
 
-  // Get statistics about detections
+
   Map<String, dynamic> getDetectionStatistics() {
     // Count detections by type
     Map<RoadFeatureType, int> countByType = {};
@@ -928,7 +880,7 @@ class DamageDetector extends ChangeNotifier {
       countByType[detection.featureType] = (countByType[detection.featureType] ?? 0) + 1;
     }
 
-    // Calculate average severity by type
+
     Map<RoadFeatureType, double> avgSeverityByType = {};
     Map<RoadFeatureType, List<double>> severitiesByType = {};
 
@@ -957,16 +909,16 @@ class DamageDetector extends ChangeNotifier {
     };
   }
 
-  // Update event detection settings
+
   void updateSettings({double? threshold, int? bufferSize, int? minSamples, int? eventTimeout}) {
     if (threshold != null) _eventThreshold = threshold;
     if (bufferSize != null && bufferSize > 0) {
       int oldSize = _bufferSize;
       int newSize = bufferSize;
 
-      // Handle buffer size change
+
       if (newSize < oldSize && _currentMotionBuffer.length > newSize) {
-        // Remove oldest entries to match new size
+
         _currentMotionBuffer.removeRange(0, _currentMotionBuffer.length - newSize);
       }
     }
@@ -976,7 +928,7 @@ class DamageDetector extends ChangeNotifier {
     }
 
     if (eventTimeout != null && eventTimeout > 0) {
-      // Update timeout but don't reset current timer if active
+
       _eventTimeout?.cancel();
       _eventTimeout = Timer(
         Duration(milliseconds: eventTimeout),
@@ -987,7 +939,6 @@ class DamageDetector extends ChangeNotifier {
     notifyListeners();
   }
 
-  // Dispose method to clean up resources
   void dispose() {
     _eventTimeout?.cancel();
     super.dispose();
