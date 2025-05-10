@@ -2,6 +2,7 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:firebase_core/firebase_core.dart';
+import 'package:road_damage_haha/screens/training_screen.dart';
 import 'firebase_options.dart';
 import 'provider/settings_provider.dart';
 import 'screens/splash_screen.dart';
@@ -9,6 +10,8 @@ import 'screens/home_map_screen.dart';
 import 'screens/calibration_screen.dart';
 import 'screens/history_screen.dart';
 import 'screens/settings_screen.dart';
+import 'screens/training_screen.dart';
+import 'screens/auth_screen.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -24,7 +27,7 @@ Future<void> main() async {
 
   runApp(
     ChangeNotifierProvider(
-      create: (_) => SettingsProvider(),
+      create: (context) => SettingsProvider(),
       child: const RoadDamageApp(),
     ),
   );
@@ -51,6 +54,8 @@ class RoadDamageApp extends StatelessWidget {
         CalibrationScreen.routeName: (_) => const CalibrationScreen(),
         HistoryScreen.routeName: (_) => const HistoryScreen(),
         SettingsScreen.routeName: (_) => const SettingsScreen(),
+        TrainingScreen.routeName: (_) => const TrainingScreen(),
+        AuthScreen.routeName: (_) =>  AuthScreen(),
       },
     );
   }

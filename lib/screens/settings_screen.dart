@@ -8,7 +8,8 @@ import 'package:url_launcher/url_launcher.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 import 'package:location/location.dart';
 import '../services/location_service.dart';
-import '../services/damage_ai_service.dart'; // Correct import path
+import '../services/damage_ai_service.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 
 class SettingsScreen extends StatefulWidget {
   const SettingsScreen({Key? key}) : super(key: key);
@@ -17,6 +18,7 @@ class SettingsScreen extends StatefulWidget {
   @override
   _SettingsScreenState createState() => _SettingsScreenState();
 }
+
 class _SettingsScreenState extends State<SettingsScreen> {
   final DamageDetector _damageDetector = DamageDetector(
     aiService: DamageAIService(),
@@ -26,17 +28,41 @@ class _SettingsScreenState extends State<SettingsScreen> {
   bool _isSyncing = false;
   String _syncStatus = '';
   String _appVersion = '1.0.0';
+  bool _isInitialized = false;
+  bool _isLoggedIn = false;
 
   @override
   void initState() {
     super.initState();
     _initialize();
     _loadAppInfo();
+    _checkLoginStatus();
+  }
+
+  Future<void> _checkLoginStatus() async {
+    final user = FirebaseAuth.instance.currentUser;
+    setState(() {
+      _isLoggedIn = user != null;
+    });
   }
 
   Future<void> _initialize() async {
-    await _damageDetector.initialize();
-    await _repository.initialize();
+    try {
+      await _damageDetector.initialize();
+      await _repository.initialize();
+
+      // Update the detector with current settings
+      final settings = Provider.of<SettingsProvider>(context, listen: false);
+      _damageDetector.updateThreshold(settings.threshold);
+      _damageDetector.setAIMode(settings.aiEnabled);
+
+      setState(() {
+        _isInitialized = true;
+      });
+    } catch (e) {
+      print('Error initializing: $e');
+      _showInfoDialog('Initialization Error', 'Failed to initialize: $e');
+    }
   }
 
   Future<void> _loadAppInfo() async {
@@ -46,10 +72,21 @@ class _SettingsScreenState extends State<SettingsScreen> {
         _appVersion = packageInfo.version;
       });
     } catch (e) {
+      print('Error loading app info: $e');
     }
   }
 
   Future<void> _syncWithCloud(bool isUpload) async {
+    if (!_isInitialized) {
+      _showInfoDialog('Not Ready', 'Please wait for initialization to complete.');
+      return;
+    }
+
+    if (!_isLoggedIn) {
+      _showLoginPrompt();
+      return;
+    }
+
     final settings = Provider.of<SettingsProvider>(context, listen: false);
     if (!settings.cloudSync) {
       _showInfoDialog(
@@ -61,7 +98,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
     setState(() {
       _isSyncing = true;
-      _syncStatus = isUpload ? 'Uploading data...' : 'Downloading data...';
+      _syncStatus = isUpload ? 'Uploading data to Firebase...' : 'Downloading data from Firebase...';
     });
 
     try {
@@ -71,8 +108,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
         _showInfoDialog(
             isUpload ? 'Upload Complete' : 'Download Complete',
             isUpload
-                ? 'Your data has been successfully synced to the cloud.'
-                : 'Your data has been successfully downloaded from the cloud.'
+                ? 'Your data has been successfully synced to Firebase.'
+                : 'Your data has been successfully downloaded from Firebase.'
         );
         setState(() {
           _syncStatus = isUpload
@@ -84,7 +121,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
             isUpload ? 'Upload Notice' : 'Download Notice',
             isUpload
                 ? 'There was a problem syncing your data. Please try again.'
-                : 'No new data found in the cloud or there was a problem downloading.'
+                : 'No new data found in Firebase or there was a problem downloading.'
         );
         setState(() {
           _syncStatus = isUpload
@@ -104,6 +141,29 @@ class _SettingsScreenState extends State<SettingsScreen> {
     }
   }
 
+  void _showLoginPrompt() {
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text('Login Required'),
+        content: Text('You need to be logged in to use cloud sync features. Would you like to log in now?'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: Text('CANCEL'),
+          ),
+          TextButton(
+            onPressed: () {
+              Navigator.of(ctx).pop();
+              Navigator.of(context).pushNamed('/auth');
+            },
+            child: Text('LOGIN'),
+          ),
+        ],
+      ),
+    );
+  }
+
   void _showInfoDialog(String title, String message) {
     showDialog(
       context: context,
@@ -121,28 +181,171 @@ class _SettingsScreenState extends State<SettingsScreen> {
   }
 
   Future<void> _launchURL(String url) async {
-    final Uri uri = Uri.parse(url);
-    if (await canLaunchUrl(uri)) {
-      await launchUrl(uri);
-    } else {
-      _showInfoDialog('Error', 'Could not open $url');
+    try {
+      final Uri uri = Uri.parse(url);
+      if (await canLaunchUrl(uri)) {
+        await launchUrl(uri);
+      } else {
+        _showInfoDialog('Error', 'Could not open $url');
+      }
+    } catch (e) {
+      _showInfoDialog('Error', 'Failed to open URL: $e');
+    }
+  }
+
+  Future<void> _clearAllData() async {
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text('Clear All Data'),
+        content: Text('This will delete all your recorded road damage data. This action cannot be undone. Do you want to continue?'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: Text('CANCEL'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: Text('DELETE', style: TextStyle(color: Colors.red)),
+          ),
+        ],
+      ),
+    );
+
+    if (confirm == true) {
+      try {
+        final settings = Provider.of<SettingsProvider>(context, listen: false);
+        await _repository.clearRecords(syncToCloud: settings.cloudSync && _isLoggedIn);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('All data has been cleared')),
+        );
+      } catch (e) {
+        _showInfoDialog('Error', 'Failed to clear data: $e');
+      }
+    }
+  }
+
+  Future<void> _signOut() async {
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text('Sign Out'),
+        content: Text('Are you sure you want to sign out?'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: Text('CANCEL'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: Text('SIGN OUT'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirm == true) {
+      try {
+        await FirebaseAuth.instance.signOut();
+        setState(() {
+          _isLoggedIn = false;
+        });
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Signed out successfully')),
+        );
+      } catch (e) {
+        _showInfoDialog('Error', 'Failed to sign out: $e');
+      }
     }
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: Text('Settings')),
-      body: Stack(
+      appBar: AppBar(
+        title: Text('Settings'),
+        actions: [
+          IconButton(
+            icon: Icon(Icons.refresh),
+            onPressed: () async {
+              await _initialize();
+              await _checkLoginStatus();
+              setState(() {});
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(content: Text('Settings refreshed')),
+              );
+            },
+          ),
+          IconButton(
+            icon: Icon(Icons.help_outline),
+            onPressed: () => _showInfoDialog(
+                'Settings Help',
+                'This screen allows you to configure app settings, manage data, and customize your experience.'
+            ),
+          ),
+        ],
+      ),
+      body: !_isInitialized
+          ? Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            CircularProgressIndicator(),
+            SizedBox(height: 16),
+            Text('Initializing settings...'),
+          ],
+        ),
+      )
+          : Stack(
         children: [
           Consumer<SettingsProvider>(
             builder: (context, settings, child) {
               return ListView(
                 padding: EdgeInsets.all(16),
                 children: [
+                  // User Account
+                  if (_isLoggedIn)
+                    Card(
+                      margin: EdgeInsets.only(bottom: 16),
+                      elevation: 2,
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                      child: Padding(
+                        padding: EdgeInsets.all(16),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Row(
+                              children: [
+                                Icon(Icons.account_circle, color: Theme.of(context).primaryColor),
+                                SizedBox(width: 8),
+                                Text('Account', style: Theme.of(context).textTheme.titleLarge),
+                              ],
+                            ),
+                            Divider(),
+                            SizedBox(height: 8),
+                            ListTile(
+                              contentPadding: EdgeInsets.zero,
+                              title: Text(FirebaseAuth.instance.currentUser?.email ?? 'User'),
+                              subtitle: Text('Logged in'),
+                              trailing: ElevatedButton(
+                                onPressed: _signOut,
+                                child: Text('Sign Out'),
+                                style: ElevatedButton.styleFrom(
+                                  backgroundColor: Colors.red,
+                                  foregroundColor: Colors.white,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+
                   // Detection Settings
                   Card(
                     margin: EdgeInsets.only(bottom: 16),
+                    elevation: 2,
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                     child: Padding(
                       padding: EdgeInsets.all(16),
                       child: Column(
@@ -189,8 +392,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
                             subtitle: Text('Intelligently identify road features'),
                             value: settings.aiEnabled,
                             onChanged: (value) {
-                              settings.toggleAIMode(value);
-                              _damageDetector.toggleAIMode(value);
+                              settings.toggleAI(value);
+                              _damageDetector.setAIMode(value);
                             },
                           ),
                           if (settings.aiEnabled)
@@ -210,9 +413,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     ),
                   ),
 
-
+                  // Map Settings
                   Card(
                     margin: EdgeInsets.only(bottom: 16),
+                    elevation: 2,
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                     child: Padding(
                       padding: EdgeInsets.all(16),
                       child: Column(
@@ -265,9 +470,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     ),
                   ),
 
-
+                  // Appearance
                   Card(
                     margin: EdgeInsets.only(bottom: 16),
+                    elevation: 2,
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                     child: Padding(
                       padding: EdgeInsets.all(16),
                       child: Column(
@@ -289,6 +496,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
                             value: settings.darkMode,
                             onChanged: (value) {
                               settings.setDarkMode(value);
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                SnackBar(
+                                  content: Text('Restart the app to apply theme changes'),
+                                  duration: Duration(seconds: 3),
+                                ),
+                              );
                             },
                           ),
                         ],
@@ -296,9 +509,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     ),
                   ),
 
-
+                  // Storage & Sync
                   Card(
                     margin: EdgeInsets.only(bottom: 16),
+                    elevation: 2,
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                     child: Padding(
                       padding: EdgeInsets.all(16),
                       child: Column(
@@ -316,16 +531,22 @@ class _SettingsScreenState extends State<SettingsScreen> {
                           SwitchListTile(
                             contentPadding: EdgeInsets.zero,
                             title: Text('Cloud Sync'),
-                            subtitle: Text('Sync road condition data with the cloud'),
+                            subtitle: Text('Sync road condition data with Firebase'),
                             value: settings.cloudSync,
-                            onChanged: settings.setCloudSync,
+                            onChanged: _isLoggedIn ? settings.setCloudSync : (value) {
+                              if (value) {
+                                _showLoginPrompt();
+                              }
+                            },
                           ),
                           SwitchListTile(
                             contentPadding: EdgeInsets.zero,
                             title: Text('Auto Sync'),
                             subtitle: Text('Automatically sync when connected to WiFi'),
                             value: settings.autoSync,
-                            onChanged: settings.cloudSync ? (value) => settings.toggleAutoSync(value) : null,
+                            onChanged: (settings.cloudSync && _isLoggedIn)
+                                ? (value) => settings.toggleAutoSync(value)
+                                : null,
                           ),
                           Divider(),
                           SizedBox(height: 8),
@@ -334,24 +555,34 @@ class _SettingsScreenState extends State<SettingsScreen> {
                             children: [
                               Expanded(
                                 child: ElevatedButton.icon(
-                                  onPressed: settings.cloudSync && !_isSyncing
+                                  onPressed: (settings.cloudSync && !_isSyncing && _isLoggedIn)
                                       ? () => _syncWithCloud(true)
                                       : null,
                                   icon: Icon(Icons.upload),
-                                  label: Text('Upload Data'),
+                                  label: Text('Upload to Firebase'),
                                 ),
                               ),
                               SizedBox(width: 16),
                               Expanded(
                                 child: ElevatedButton.icon(
-                                  onPressed: settings.cloudSync && !_isSyncing
+                                  onPressed: (settings.cloudSync && !_isSyncing && _isLoggedIn)
                                       ? () => _syncWithCloud(false)
                                       : null,
                                   icon: Icon(Icons.download),
-                                  label: Text('Download Data'),
+                                  label: Text('Download from Firebase'),
                                 ),
                               ),
                             ],
+                          ),
+                          SizedBox(height: 16),
+                          ElevatedButton.icon(
+                            onPressed: _clearAllData,
+                            icon: Icon(Icons.delete_forever),
+                            label: Text('Clear All Data'),
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: Colors.red,
+                              foregroundColor: Colors.white,
+                            ),
                           ),
                           if (_syncStatus.isNotEmpty)
                             Padding(
@@ -362,6 +593,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
                                   fontSize: 12,
                                   color: _syncStatus.contains('failed')
                                       ? Colors.red
+                                      : _syncStatus.contains('issues')
+                                      ? Colors.orange
                                       : Colors.green,
                                 ),
                               ),
@@ -371,8 +604,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     ),
                   ),
 
+                  // About
                   Card(
                     margin: EdgeInsets.only(bottom: 16),
+                    elevation: 2,
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                     child: Padding(
                       padding: EdgeInsets.all(16),
                       child: Column(
@@ -409,6 +645,74 @@ class _SettingsScreenState extends State<SettingsScreen> {
                             trailing: Icon(Icons.arrow_forward_ios, size: 16),
                             onTap: () => _launchURL('mailto:feedback@example.com'),
                           ),
+                          Divider(),
+                          SizedBox(height: 8),
+                          Center(
+                            child: Text(
+                              '© 2023 Road Damage Detector Team',
+                              style: TextStyle(
+                                fontSize: 12,
+                                color: Colors.grey,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+
+                  // Navigation
+                  Card(
+                    margin: EdgeInsets.only(bottom: 16),
+                    elevation: 2,
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                    child: Padding(
+                      padding: EdgeInsets.all(16),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Row(
+                            children: [
+                              Icon(Icons.navigation, color: Theme.of(context).primaryColor),
+                              SizedBox(width: 8),
+                              Text('Navigation', style: Theme.of(context).textTheme.titleLarge),
+                            ],
+                          ),
+                          Divider(),
+                          SizedBox(height: 8),
+                          ListTile(
+                            contentPadding: EdgeInsets.zero,
+                            leading: Icon(Icons.map),
+                            title: Text('Home Map'),
+                            subtitle: Text('View road damage map'),
+                            trailing: Icon(Icons.arrow_forward_ios, size: 16),
+                            onTap: () => Navigator.of(context).pushReplacementNamed('/home'),
+                          ),
+                          ListTile(
+                            contentPadding: EdgeInsets.zero,
+                            leading: Icon(Icons.history),
+                            title: Text('History'),
+                            subtitle: Text('View damage history'),
+                            trailing: Icon(Icons.arrow_forward_ios, size: 16),
+                            onTap: () => Navigator.of(context).pushNamed('/history'),
+                          ),
+                          ListTile(
+                            contentPadding: EdgeInsets.zero,
+                            leading: Icon(Icons.tune),
+                            title: Text('Calibration'),
+                            subtitle: Text('Calibrate sensors'),
+                            trailing: Icon(Icons.arrow_forward_ios, size: 16),
+                            onTap: () => Navigator.of(context).pushNamed('/calibration'),
+                          ),
+                          if (!_isLoggedIn)
+                            ListTile(
+                              contentPadding: EdgeInsets.zero,
+                              leading: Icon(Icons.login),
+                              title: Text('Login'),
+                              subtitle: Text('Sign in to enable cloud features'),
+                              trailing: Icon(Icons.arrow_forward_ios, size: 16),
+                              onTap: () => Navigator.of(context).pushNamed('/auth'),
+                            ),
                         ],
                       ),
                     ),

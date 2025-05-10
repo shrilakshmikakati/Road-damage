@@ -47,6 +47,7 @@ dependencies:
   device_info_plus: ^10.0.1 # Use the latest version
   uuid: ^4.1.0
   get_it: ^7.6.0
+  connectivity_plus: ^4.0.1
 
 
   lints: ^5.0.0 # Update from 5.1.1

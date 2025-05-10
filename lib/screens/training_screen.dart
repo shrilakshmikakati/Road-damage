@@ -20,7 +20,7 @@ class TrainingScreen extends StatefulWidget {
 
 class _TrainingScreenState extends State<TrainingScreen> {
   late final DamageDetector _damageDetector;
-
+  // The repository can be removed if not used
   bool _isTraining = false;
   String _trainingStatus = '';
   int _currentExampleCount = 0;
@@ -31,8 +31,8 @@ class _TrainingScreenState extends State<TrainingScreen> {
   void initState() {
     super.initState();
     _damageDetector = DamageDetector(
-        aiService: DamageAIService(),
-        locationService: LocationServiceImpl(),
+      aiService: DamageAIService(),
+      locationService: LocationServiceImpl(),
     );
     _initialize();
   }
@@ -69,13 +69,13 @@ class _TrainingScreenState extends State<TrainingScreen> {
     });
 
     try {
-
+      // Get training data from Firebase
       final snapshot = await _trainingDataRef.child(_userId!).child('examples').get();
 
       if (snapshot.exists) {
         final trainingData = snapshot.value as Map<dynamic, dynamic>;
 
-
+        // Convert data to format needed by damage detector
         final examples = <Map<String, dynamic>>[];
 
         trainingData.forEach((key, value) {
@@ -86,10 +86,10 @@ class _TrainingScreenState extends State<TrainingScreen> {
           });
         });
 
-
+        // Train model
         bool success = await _damageDetector.trainModelWithData(examples);
 
-
+        // Save model to Firebase
         if (success) {
           final modelData = await _damageDetector.exportTrainedModelData();
           await _trainingDataRef.child(_userId!).child('model').set(modelData);
@@ -139,10 +139,10 @@ class _TrainingScreenState extends State<TrainingScreen> {
 
     if (confirmed == true) {
       try {
-
+        // Clear from local detector
         await _damageDetector.clearTrainingData();
 
-
+        // Clear from Firebase
         await _trainingDataRef.child(_userId!).remove();
 
         setState(() {
@@ -161,10 +161,10 @@ class _TrainingScreenState extends State<TrainingScreen> {
     if (_userId == null) return;
 
     try {
-
+      // Collect sensor data for training example
       final exampleData = await _damageDetector.collectTrainingExample();
 
-
+      // Save to Firebase
       final exampleId = DateTime.now().millisecondsSinceEpoch.toString();
 
       await _trainingDataRef
@@ -177,6 +177,7 @@ class _TrainingScreenState extends State<TrainingScreen> {
         'timestamp': DateTime.now().millisecondsSinceEpoch,
       });
 
+      // Update example count
       _currentExampleCount++;
       await _trainingDataRef
           .child(_userId!)
@@ -184,6 +185,7 @@ class _TrainingScreenState extends State<TrainingScreen> {
           .child('exampleCount')
           .set(_currentExampleCount);
 
+      // Update local detector
       _damageDetector.updateTrainingExampleCount(_currentExampleCount);
 
       setState(() {
@@ -224,7 +226,7 @@ class _TrainingScreenState extends State<TrainingScreen> {
           return ListView(
             padding: const EdgeInsets.all(16),
             children: [
-
+              // Status Card
               Card(
                 child: Padding(
                   padding: const EdgeInsets.all(16),
@@ -259,7 +261,7 @@ class _TrainingScreenState extends State<TrainingScreen> {
                             padding: const EdgeInsets.symmetric(
                               horizontal: 32,
                               vertical: 12,
-                            )
+                            ),
                           ),
                           child: _isTraining
                               ? Row(
@@ -311,7 +313,7 @@ class _TrainingScreenState extends State<TrainingScreen> {
 
               const SizedBox(height: 16),
 
-
+              // Manual Collection Card
               Card(
                 child: Padding(
                   padding: const EdgeInsets.all(16),
@@ -379,6 +381,7 @@ class _TrainingScreenState extends State<TrainingScreen> {
 
               const SizedBox(height: 16),
 
+              // Data Management Card
               Card(
                 child: Padding(
                   padding: const EdgeInsets.all(16),
