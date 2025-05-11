@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:road_damage_haha/screens/training_screen.dart';
+import 'package:firebase_app_check/firebase_app_check.dart';
 import 'firebase_options.dart';
 import 'provider/settings_provider.dart';
 import 'screens/splash_screen.dart';
@@ -19,6 +20,14 @@ Future<void> main() async {
   try {
     await Firebase.initializeApp(
       options: DefaultFirebaseOptions.currentPlatform,
+    );
+    await FirebaseAppCheck.instance.activate(
+      // Use provider based on platform
+      androidProvider: AndroidProvider.playIntegrity,
+      // For iOS, use DeviceCheck in production
+      appleProvider: AppleProvider.deviceCheck,
+      // Use debug provider for development
+      webProvider: ReCaptchaV3Provider('YOUR_RECAPTCHA_SITE_KEY'),
     );
   } catch (e) {
     print('Firebase initialization error: $e');

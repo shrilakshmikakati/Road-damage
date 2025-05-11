@@ -48,6 +48,7 @@ dependencies:
   uuid: ^4.1.0
   get_it: ^7.6.0
   connectivity_plus: ^4.0.1
+  firebase_app_check: ^0.3.2+5
 
 
   lints: ^5.0.0 # Update from 5.1.1
