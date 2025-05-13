@@ -1,54 +1,131 @@
-// lib/models/road_damage.dart
-import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:flutter/material.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
-import 'road_feature_type.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'damage_type.dart';
+import 'damage_severity.dart';
 
 class RoadDamage {
-  final String? id;
-  final RoadFeatureType type;
+  final String id;
   final LatLng position;
-  final double severity;
-  final Timestamp? timestamp;
-  final String? description;
-  final bool? verified;
+  final DamageType damageType;
+  final String description;
+  final DateTime timestamp;
+  final DamageSeverity severity;
+  final bool verified;
+  final double confidenceScore;
+
+  // Add these getters to fix the errors
+  DamageType get type => damageType;
 
   RoadDamage({
-    this.id,
-    required this.type,
+    required this.id,
     required this.position,
-    required this.severity,
-    this.timestamp,
-    this.description,
-    this.verified,
+    required this.damageType,
+    required this.description,
+    required this.timestamp,
+    this.severity = DamageSeverity.medium,
+    this.verified = false,
+    this.confidenceScore = 1.0,
   });
 
+  // Add location getter to support legacy code
+  LatLng get location => position;
 
-  factory RoadDamage.fromMap(Map<String, dynamic> map, String documentId) {
+  // Convert to Map for storage
+  Map<String, dynamic> toMap() {
+    return {
+      'id': id,
+      'latitude': position.latitude,
+      'longitude': position.longitude,
+      'damageType': damageType.toString().split('.').last,
+      'description': description,
+      'timestamp': Timestamp.fromDate(timestamp),
+      'severity': severity.toString().split('.').last,
+      'verified': verified,
+      'confidenceScore': confidenceScore,
+    };
+  }
+  // Convert RoadDamage object to JSON
+  Map<String, dynamic> toJson() {
+    return {
+      'id': id,
+      'latitude': position.latitude,
+      'longitude': position.longitude,
+      'damageType': damageType.toString().split('.').last,
+      'description': description,
+      'timestamp': timestamp.millisecondsSinceEpoch,
+      'severity': severity.toString().split('.').last,
+      'verified': verified,
+      'confidenceScore': confidenceScore,
+    };
+  }
+
+// Create RoadDamage object from JSON
+  static RoadDamage fromJson(Map<String, dynamic> json) {
     return RoadDamage(
-      id: documentId,
-      type: RoadFeatureTypeExtension.fromString(map['type'] as String),
+      id: json['id'] ?? '',
       position: LatLng(
-        map['latitude'] as double,
-        map['longitude'] as double,
+          json['latitude'] ?? 0.0,
+          json['longitude'] ?? 0.0
       ),
-      severity: map['severity'] as double,
-      timestamp: map['timestamp'] as Timestamp,
-      description: map['description'] as String?,
-      verified: map['verified'] as bool?,
+      damageType: _getDamageTypeFromString(json['damageType'] ?? 'pothole'),
+      description: json['description'] ?? '',
+      timestamp: DateTime.fromMillisecondsSinceEpoch(json['timestamp'] ?? DateTime.now().millisecondsSinceEpoch),
+      severity: _getSeverityFromString(json['severity'] ?? 'medium'),
+      verified: json['verified'] ?? false,
+      confidenceScore: (json['confidenceScore'] ?? 1.0).toDouble(),
+    );
+  }
+  // Create from Map for retrieval
+  factory RoadDamage.fromMap(Map<String, dynamic> map) {
+    return RoadDamage(
+      id: map['id'] ?? '',
+      position: LatLng(
+          map['latitude'] ?? 0.0,
+          map['longitude'] ?? 0.0
+      ),
+      damageType: _getDamageTypeFromString(map['damageType'] ?? 'pothole'),
+      description: map['description'] ?? '',
+      timestamp: (map['timestamp'] as Timestamp?)?.toDate() ?? DateTime.now(),
+      severity: _getSeverityFromString(map['severity'] ?? 'medium'),
+      verified: map['verified'] ?? false,
+      confidenceScore: (map['confidenceScore'] ?? 1.0).toDouble(),
     );
   }
 
+  static DamageType _getDamageTypeFromString(String typeString) {
+    switch (typeString) {
+      case 'pothole':
+        return DamageType.pothole;
+      case 'crack':
+        return DamageType.crack;
+      case 'roughPatch':
+        return DamageType.roughPatch;
+      case 'speedBreaker':
+        return DamageType.speedBreaker;
+      case 'railwayCrossing':
+        return DamageType.railwayCrossing;
+      case 'smooth':
+        return DamageType.smooth;
+      case 'bump':
+        return DamageType.bump;
+      default:
+        return DamageType.other;
+    }
+  }
 
-  Map<String, dynamic> toMap() {
-    return {
-      'type': type.toString().split('.').last,
-      'latitude': position.latitude,
-      'longitude': position.longitude,
-      'severity': severity,
-      'timestamp': timestamp ?? Timestamp.now(),
-      'description': description ?? '',
-      'verified': verified ?? false,
-    };
+  static DamageSeverity _getSeverityFromString(String severityString) {
+    switch (severityString) {
+      case 'low':
+        return DamageSeverity.low;
+      case 'medium':
+        return DamageSeverity.medium;
+      case 'high':
+        return DamageSeverity.high;
+      case 'critical':
+        return DamageSeverity.critical;
+      default:
+        return DamageSeverity.medium;
+    }
   }
 }
-

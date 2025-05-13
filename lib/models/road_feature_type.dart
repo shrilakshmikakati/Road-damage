@@ -1,33 +1,15 @@
-// lib/models/road_feature_type.dart
-
-/// Enum representing different types of road features that can be detected
 enum RoadFeatureType {
-  pothole,        // A hole in the road surface
-  roughPatch,     // A rough or uneven section of road
-  speedBreaker,   // An intentional bump/speed bump
-  railwayCrossing, // A railway crossing
-  smooth          // Normal, smooth road conditions
+  pothole,
+  roughPatch,
+  speedBreaker,
+  railwayCrossing,
+  smooth,
+  bump,
+  smoothRoad,
 }
 
-
+// Extension to add display names
 extension RoadFeatureTypeExtension on RoadFeatureType {
-
-  static RoadFeatureType fromString(String value) {
-    switch (value.toLowerCase()) {
-      case 'pothole':
-        return RoadFeatureType.pothole;
-      case 'roughpatch':
-        return RoadFeatureType.roughPatch;
-      case 'speedbreaker':
-        return RoadFeatureType.speedBreaker;
-      case 'railwaycrossing':
-        return RoadFeatureType.railwayCrossing;
-      case 'smooth':
-      default:
-        return RoadFeatureType.smooth;
-    }
-  }
-
   String get displayName {
     switch (this) {
       case RoadFeatureType.pothole:
@@ -40,27 +22,72 @@ extension RoadFeatureTypeExtension on RoadFeatureType {
         return 'Railway Crossing';
       case RoadFeatureType.smooth:
         return 'Smooth Road';
+      case RoadFeatureType.bump:
+        return 'Speed Bump';
+      case RoadFeatureType.smoothRoad:
+        return 'Smooth Road';
     }
   }
 
-
-  bool get isDamage {
-    return this == RoadFeatureType.pothole || this == RoadFeatureType.roughPatch;
-  }
-
-
-  int get color {
+  int get defaultSeverity {
     switch (this) {
       case RoadFeatureType.pothole:
-        return 0xFFFF0000; // Red
+        return 3;
       case RoadFeatureType.roughPatch:
-        return 0xFFFFA500; // Orange
+        return 2;
       case RoadFeatureType.speedBreaker:
-        return 0xFFFFFF00; // Yellow
+        return 1;
       case RoadFeatureType.railwayCrossing:
-        return 0xFF800080; // Purple
+        return 1;
       case RoadFeatureType.smooth:
-        return 0xFF00FF00; // Green
+        return 0;
+      case RoadFeatureType.bump:
+        return 2;
+      case RoadFeatureType.smoothRoad:
+        return 0;
+    }
+  }
+
+  static RoadFeatureType fromString(String typeString) {
+    switch (typeString) {
+      case 'pothole':
+        return RoadFeatureType.pothole;
+      case 'roughPatch':
+        return RoadFeatureType.roughPatch;
+      case 'speedBreaker':
+        return RoadFeatureType.speedBreaker;
+      case 'railwayCrossing':
+        return RoadFeatureType.railwayCrossing;
+      case 'smooth':
+        return RoadFeatureType.smooth;
+      case 'bump':
+        return RoadFeatureType.bump;
+      case 'smoothRoad':
+        return RoadFeatureType.smoothRoad;
+      default:
+        return RoadFeatureType.pothole;
+    }
+  }
+}
+
+// Add this extension to provide the severity getter
+extension RoadFeatureTypeSeverity on RoadFeatureType {
+  double get severity {
+    switch (this) {
+      case RoadFeatureType.pothole:
+        return 5.0;
+      case RoadFeatureType.roughPatch:
+        return 3.0;
+      case RoadFeatureType.speedBreaker:
+        return 2.0;
+      case RoadFeatureType.railwayCrossing:
+        return 2.5;
+      case RoadFeatureType.smooth:
+        return 0.0;
+      case RoadFeatureType.bump:
+        return 3.0;
+      case RoadFeatureType.smoothRoad:
+        return 0.0;
     }
   }
 }

@@ -1,157 +1,59 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:firebase_auth/firebase_auth.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import '../models/road_damage.dart';
-import '../models/road_feature_type.dart'; // Added import for RoadFeatureType
+import '../models/damage_type.dart';
+import '../models/damage_severity.dart';
 
 class FirebaseRepository {
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
-  final FirebaseAuth _auth = FirebaseAuth.instance;
+  final String _collection = 'road_damages';
 
-
-  final CollectionReference _roadDamageCollection =
-  FirebaseFirestore.instance.collection('road_damages');
-
-
-  Future<void> initialize() async {
-
-    await _ensureUserLoggedIn();
+  // Add a road damage report to Firestore
+  Future<void> addRoadDamage(RoadDamage damage) async {
+    await _firestore.collection(_collection).doc(damage.id).set(damage.toMap());
   }
 
-  Future<void> _ensureUserLoggedIn() async {
-    if (_auth.currentUser == null) {
-
-      await _auth.signInAnonymously();
-    }
+  // Get all road damages from Firestore
+  Future<List<RoadDamage>> getRoadDamages() async {
+    final snapshot = await _firestore.collection(_collection).get();
+    return snapshot.docs.map((doc) => RoadDamage.fromMap(doc.data())).toList();
   }
 
+  // Get road damages near a location
+  Future<List<RoadDamage>> getNearbyDamages(LatLng location, double radiusKm) async {
+    // This is a simplified approach - for production, use geohashing or Firestore's GeoPoint
+    final snapshot = await _firestore.collection(_collection).get();
 
-  Future<bool> uploadRoadDamage(List<RoadDamage> damages) async {
-    try {
-      await _ensureUserLoggedIn();
-
-      String? userId = _auth.currentUser?.uid;
-      if (userId == null || userId.isEmpty) {
-        print('Error: No user logged in');
-        return false;
-      }
-
-      WriteBatch batch = _firestore.batch();
-
-
-      for (RoadDamage damage in damages) {
-
-        DocumentReference docRef = _roadDamageCollection.doc();
-
-
-        Map<String, dynamic> data = {
-          'userId': userId,
-          'type': damage.type.toString().split('.').last,
-          'latitude': damage.position.latitude,
-          'longitude': damage.position.longitude,
-          'severity': damage.severity,
-          'timestamp': damage.timestamp ?? Timestamp.now(),
-          'description': damage.description ?? '',
-          'verified': damage.verified ?? false,
-        };
-
-        batch.set(docRef, data);
-      }
-
-      await batch.commit();
-      return true;
-    } catch (e) {
-      print('Error uploading road damage data: $e');
-      return false;
-    }
+    return snapshot.docs
+        .map((doc) => RoadDamage.fromMap(doc.data()))
+        .where((damage) {
+      final distance = _calculateDistance(
+          location.latitude,
+          location.longitude,
+          damage.position.latitude,
+          damage.position.longitude
+      );
+      return distance <= radiusKm;
+    })
+        .toList();
   }
 
-  Future<List<RoadDamage>> downloadRoadDamage() async {
-    try {
-      await _ensureUserLoggedIn();
-
-
-      QuerySnapshot snapshot = await _roadDamageCollection
-          .orderBy('timestamp', descending: true)
-          .get();
-
-      List<RoadDamage> damages = snapshot.docs.map((doc) {
-        Map<String, dynamic> data = doc.data() as Map<String, dynamic>;
-
-        RoadFeatureType type = _parseRoadFeatureType(data['type'] as String);
-
-        LatLng position = LatLng(
-            data['latitude'] as double,
-            data['longitude'] as double
-        );
-
-
-        return RoadDamage(
-          id: doc.id,
-          type: type,
-          position: position,
-          severity: data['severity'] as double,
-          timestamp: data['timestamp'] as Timestamp,
-          description: data['description'] as String?,
-          verified: data['verified'] as bool?,
-        );
-      }).toList();
-
-      return damages;
-    } catch (e) {
-      print('Error downloading road damage data: $e');
-      return [];
-    }
+  // Update verification status
+  Future<void> updateVerificationStatus(String damageId, bool isVerified) async {
+    await _firestore.collection(_collection).doc(damageId).update({
+      'verified': isVerified,
+    });
   }
 
-  RoadFeatureType _parseRoadFeatureType(String typeString) {
-    switch (typeString) {
-      case 'pothole':
-        return RoadFeatureType.pothole;
-      case 'roughPatch':
-        return RoadFeatureType.roughPatch;
-      case 'speedBreaker':
-        return RoadFeatureType.speedBreaker;
-      case 'railwayCrossing':
-        return RoadFeatureType.railwayCrossing;
-      case 'smooth':
-        return RoadFeatureType.smooth;
-      default:
-        return RoadFeatureType.pothole; // Default value
-    }
+  // Delete a road damage report
+  Future<void> deleteRoadDamage(String damageId) async {
+    await _firestore.collection(_collection).doc(damageId).delete();
   }
 
-
-  Future<bool> clearUserData() async {
-    try {
-
-      await _ensureUserLoggedIn();
-
-      String? userId = _auth.currentUser?.uid;
-      if (userId == null || userId.isEmpty) {
-        print('Error: No user logged in');
-        return false;
-      }
-
-      QuerySnapshot snapshot = await _roadDamageCollection
-          .where('userId', isEqualTo: userId)
-          .get();
-
-      if (snapshot.docs.isEmpty) {
-        print('No documents found to delete');
-        return true;
-      }
-
-      WriteBatch batch = _firestore.batch();
-      for (DocumentSnapshot doc in snapshot.docs) {
-        batch.delete(doc.reference);
-      }
-      await batch.commit();
-
-      return true;
-    } catch (e) {
-      print('Error clearing user data: $e');
-      return false;
-    }
+  // Calculate distance between two points using Haversine formula
+  double _calculateDistance(double lat1, double lon1, double lat2, double lon2) {
+    // Implementation of distance calculation
+    // For simplicity, this is a placeholder
+    return 0.0; // Replace with actual implementation
   }
 }

@@ -1,12 +1,9 @@
-// lib/screens/calibration_screen.dart
+import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:sensors_plus/sensors_plus.dart';
 import 'package:provider/provider.dart';
 import '../provider/settings_provider.dart';
-import 'package:location/location.dart';
 import '../utils/damage_detector.dart';
-import '../services/location_service.dart';
-import '../services/damage_ai_service.dart';
-import '../repositories/damage_repository.dart';
 
 class CalibrationScreen extends StatefulWidget {
   static const routeName = '/calibration';
@@ -18,342 +15,275 @@ class CalibrationScreen extends StatefulWidget {
 }
 
 class _CalibrationScreenState extends State<CalibrationScreen> {
-  final DamageDetector _damageDetector = DamageDetector(
-    aiService: DamageAIService(),
-    locationService: LocationServiceImpl(),
-  );
-  final DamageRepository _repository = DamageRepository();
-  bool _syncInProgress = false;
-  String _syncStatus = '';
-  bool _isCalibrating = false;
-  double _calibrationProgress = 0.0;
-  String _calibrationStatus = 'Not calibrated';
+  final DamageDetector _damageDetector = DamageDetector();
+
+  List<double> _accelerometerValues = [0, 0, 0];
+  List<List<double>> _accelerometerHistory = [];
+
+  StreamSubscription<AccelerometerEvent>? _accelerometerSubscription;
+
+  double _maxZ = 0;
+  double _minZ = 0;
+  double _currentThreshold = 1.5;
 
   @override
   void initState() {
     super.initState();
-    _initialize();
+    _damageDetector.initialize();
+    _startListening();
+
+    // Get current threshold from settings
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final settings = Provider.of<SettingsProvider>(context, listen: false);
+      setState(() {
+        _currentThreshold = settings.sensitivityThreshold;
+      });
+    });
   }
 
-  Future<void> _initialize() async {
-    await _damageDetector.initialize();
-    await _repository.initialize();
+  void _startListening() {
+    _accelerometerSubscription = accelerometerEvents.listen((AccelerometerEvent event) {
+      setState(() {
+        _accelerometerValues = [event.x, event.y, event.z];
+        _accelerometerHistory.add([event.x, event.y, event.z]);
 
-    // Check if already calibrated
+        // Keep history to a reasonable size
+        if (_accelerometerHistory.length > 100) {
+          _accelerometerHistory.removeAt(0);
+        }
+
+        // Update min/max Z values
+        if (event.z > _maxZ) _maxZ = event.z;
+        if (event.z < _minZ) _minZ = event.z;
+      });
+    });
+  }
+
+  void _resetCalibration() {
+    setState(() {
+      _maxZ = 0;
+      _minZ = 0;
+      _accelerometerHistory.clear();
+    });
+  }
+
+  void _saveCalibration() {
+    // Calculate a good threshold based on recorded values
+    double range = (_maxZ - _minZ).abs();
+    double suggestedThreshold = range * 0.4; // 40% of the range
+
+    // Ensure threshold is at least 1.0
+    suggestedThreshold = suggestedThreshold < 1.0 ? 1.0 : suggestedThreshold;
+
+    // Update settings
     final settings = Provider.of<SettingsProvider>(context, listen: false);
-    if (settings.isCalibrated) {
-      setState(() {
-        _calibrationStatus = 'Device calibrated';
-        _calibrationProgress = 1.0;
-      });
-    }
-  }
-
-  Future<void> _syncWithCloud() async {
-    setState(() {
-      _syncInProgress = true;
-      _syncStatus = 'Syncing...';
-    });
-
-    try {
-      // First upload
-      bool uploadSuccess = await _repository.syncWithCloud(true);
-
-      // Then download
-      bool downloadSuccess = await _repository.syncWithCloud(false);
-
-      setState(() {
-        _syncStatus = uploadSuccess && downloadSuccess
-            ? 'Sync completed successfully'
-            : 'Sync completed with issues';
-      });
-    } catch (e) {
-      setState(() {
-        _syncStatus = 'Sync failed: $e';
-      });
-    } finally {
-      setState(() {
-        _syncInProgress = false;
-      });
-    }
-  }
-
-  Future<void> _startCalibration() async {
-    setState(() {
-      _isCalibrating = true;
-      _calibrationProgress = 0.0;
-      _calibrationStatus = 'Calibrating...';
-    });
-
-    // Simulate calibration process
-    for (int i = 1; i <= 10; i++) {
-      await Future.delayed(Duration(milliseconds: 300));
-      setState(() {
-        _calibrationProgress = i / 10;
-      });
-    }
-
-    // Update settings when calibration is complete
-    final settings = Provider.of<SettingsProvider>(context, listen: false);
-    settings.setCalibrated(true);
+    settings.updateSensitivityThreshold(suggestedThreshold);
 
     setState(() {
-      _isCalibrating = false;
-      _calibrationStatus = 'Calibration complete';
+      _currentThreshold = suggestedThreshold;
     });
 
-    // Show success dialog
-    _showInfoDialog(
-        'Calibration Complete',
-        'Your device has been successfully calibrated for optimal damage detection.'
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text('Calibration saved. New threshold: ${suggestedThreshold.toStringAsFixed(2)}')),
     );
   }
 
-  void _showInfoDialog(String title, String message) {
-    showDialog(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: Text(title),
-        content: Text(message),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(ctx).pop(),
-            child: Text('OK'),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildSectionHeader(String title) {
-    return Padding(
-      padding: const EdgeInsets.only(top: 16.0, bottom: 8.0),
-      child: Text(
-        title,
-        style: TextStyle(
-          fontSize: 18,
-          fontWeight: FontWeight.bold,
-          color: Theme.of(context).primaryColor,
-        ),
-      ),
-    );
+  @override
+  void dispose() {
+    _accelerometerSubscription?.cancel();
+    _damageDetector.dispose();
+    super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Calibration & Settings')),
-      body: Consumer<SettingsProvider>(
-        builder: (context, settings, child) {
-          return ListView(
-            padding: const EdgeInsets.all(16),
-            children: [
-              // Calibration section
-              _buildSectionHeader('Device Calibration'),
-
-              Card(
-                elevation: 4,
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(12),
-                ),
-                child: Padding(
-                  padding: const EdgeInsets.all(16.0),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        'Calibration Status: $_calibrationStatus',
-                        style: TextStyle(fontWeight: FontWeight.bold),
-                      ),
-                      SizedBox(height: 12),
-                      LinearProgressIndicator(
-                        value: _calibrationProgress,
-                        backgroundColor: Colors.grey[300],
-                        valueColor: AlwaysStoppedAnimation<Color>(
-                          Theme.of(context).primaryColor,
-                        ),
-                      ),
-                      SizedBox(height: 16),
-                      Center(
-                        child: ElevatedButton.icon(
-                          icon: Icon(_isCalibrating ? Icons.hourglass_top : Icons.sensors),
-                          label: Text(_isCalibrating ? 'Calibrating...' : 'Start Calibration'),
-                          onPressed: _isCalibrating ? null : _startCalibration,
-                          style: ElevatedButton.styleFrom(
-                            padding: EdgeInsets.symmetric(horizontal: 24, vertical: 12),
-                          ),
-                        ),
-                      ),
-                      SizedBox(height: 8),
-                      Center(
-                        child: Text(
-                          'Place your device on a flat surface for best results',
-                          style: TextStyle(
-                            fontSize: 12,
-                            color: Colors.grey[600],
-                          ),
-                          textAlign: TextAlign.center,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-
-              // Damage Detection section
-              _buildSectionHeader('Damage Detection'),
-
-              // Threshold slider
-              Card(
-                child: Padding(
-                  padding: const EdgeInsets.all(16),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                        children: [
-                          Text('Damage Threshold: ${settings.threshold.toStringAsFixed(1)}'),
-                          Tooltip(
-                            message: 'Lower value means more sensitive detection',
-                            child: Icon(Icons.info_outline, size: 16),
-                          ),
-                        ],
-                      ),
-                      Slider(
-                        value: settings.threshold,
-                        min: 0.5,
-                        max: 5.0,
-                        divisions: 9,
-                        label: settings.threshold.toStringAsFixed(1),
-                        onChanged: (value) => settings.updateThreshold(value),
-                      ),
-                      Text(
-                        'Sensitivity: ${settings.threshold <= 1.5 ? "High" : settings.threshold <= 3.0 ? "Medium" : "Low"}',
-                        style: TextStyle(
-                          color: settings.threshold <= 1.5
-                              ? Colors.red
-                              : settings.threshold <= 3.0
-                              ? Colors.orange
-                              : Colors.green,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-
-              // AI toggle
-              SwitchListTile(
-                title: Text('AI Detection'),
-                subtitle: Text('Use AI for more accurate detection'),
-                value: settings.aiEnabled,
-                onChanged: (value) => settings.toggleAI(value),
-              ),
-
-              // AI training status
-              ListTile(
-                title: Text('AI Training Status'),
-                subtitle: Text('${_damageDetector.trainingExampleCount} examples collected'),
-                trailing: ElevatedButton(
-                  child: Text('Train AI'),
-                  onPressed: () {
-                    Navigator.of(context).pushNamed('/training');
-                  },
-                ),
-              ),
-
-              SizedBox(height: 16),
-
-              // Cloud sync section
-              _buildSectionHeader('Cloud Sync'),
-
-              // Auto sync toggle
-              SwitchListTile(
-                title: Text('Auto Sync'),
-                subtitle: Text('Automatically sync data with cloud'),
-                value: settings.autoSync,
-                onChanged: (value) => settings.toggleAutoSync(value),
-              ),
-
-              // Manual sync button
-              Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 8.0),
-                child: ElevatedButton(
-                  onPressed: _syncInProgress ? null : _syncWithCloud,
-                  child: _syncInProgress
-                      ? Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      SizedBox(
-                        width: 16,
-                        height: 16,
-                        child: CircularProgressIndicator(
-                          strokeWidth: 2,
-                          valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
-                        ),
-                      ),
-                      SizedBox(width: 8),
-                      Text('Syncing...'),
-                    ],
-                  )
-                      : Text('Sync Now'),
-                ),
-              ),
-
-              if (_syncStatus.isNotEmpty)
-                Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 16.0),
-                  child: Text(
-                    _syncStatus,
-                    style: TextStyle(
-                      color: _syncStatus.contains('failed')
-                          ? Colors.red
-                          : _syncStatus.contains('issues')
-                          ? Colors.orange
-                          : Colors.green,
-                    ),
-                  ),
-                ),
-
-              // Navigation section
-              _buildSectionHeader('Navigation'),
-
-              Card(
-                child: Column(
+      appBar: AppBar(
+        title: const Text('Calibration'),
+      ),
+      body: SingleChildScrollView(
+        padding: const EdgeInsets.all(16.0),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'Calibration Instructions',
+              style: Theme.of(context).textTheme.titleLarge,
+            ),
+            const SizedBox(height: 8),
+            Text(
+              'Drive over different road surfaces to calibrate the sensor. Try to include both smooth roads and rough patches.',
+              style: Theme.of(context).textTheme.bodyMedium,
+            ),
+            const SizedBox(height: 24),
+            Text(
+              'Current Sensor Values',
+              style: Theme.of(context).textTheme.titleMedium,
+            ),
+            const SizedBox(height: 8),
+            Card(
+              child: Padding(
+                padding: const EdgeInsets.all(16.0),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceAround,
                   children: [
-                    ListTile(
-                      leading: Icon(Icons.map),
-                      title: Text('Home Map'),
-                      subtitle: Text('View road damage map'),
-                      trailing: Icon(Icons.arrow_forward_ios, size: 16),
-                      onTap: () => Navigator.of(context).pushReplacementNamed('/home'),
-                    ),
-                    Divider(height: 1),
-                    ListTile(
-                      leading: Icon(Icons.history),
-                      title: Text('History'),
-                      subtitle: Text('View damage history'),
-                      trailing: Icon(Icons.arrow_forward_ios, size: 16),
-                      onTap: () => Navigator.of(context).pushNamed('/history'),
-                    ),
-                    Divider(height: 1),
-                    ListTile(
-                      leading: Icon(Icons.settings),
-                      title: Text('Settings'),
-                      subtitle: Text('Advanced settings'),
-                      trailing: Icon(Icons.arrow_forward_ios, size: 16),
-                      onTap: () => Navigator.of(context).pushNamed('/settings'),
-                    ),
+                    _buildSensorValue('X', _accelerometerValues[0]),
+                    _buildSensorValue('Y', _accelerometerValues[1]),
+                    _buildSensorValue('Z', _accelerometerValues[2]),
                   ],
                 ),
               ),
-
-              SizedBox(height: 24),
+            ),
+            const SizedBox(height: 24),
+            Text(
+              'Recorded Range',
+              style: Theme.of(context).textTheme.titleMedium,
+            ),
+            const SizedBox(height: 8),
+            Card(
+              child: Padding(
+                padding: const EdgeInsets.all(16.0),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceAround,
+                  children: [
+                    _buildSensorValue('Min Z', _minZ),
+                    _buildSensorValue('Max Z', _maxZ),
+                    _buildSensorValue('Range', (_maxZ - _minZ).abs()),
+                  ],
+                ),
+              ),
+            ),
+            const SizedBox(height: 24),
+            Text(
+              'Current Threshold',
+              style: Theme.of(context).textTheme.titleMedium,
+            ),
+            const SizedBox(height: 8),
+            Card(
+              child: Padding(
+                padding: const EdgeInsets.all(16.0),
+                child: Center(
+                  child: Text(
+                    _currentThreshold.toStringAsFixed(2),
+                    style: Theme.of(context).textTheme.headlineMedium,
+                  ),
+                ),
+              ),
+            ),
+            const SizedBox(height: 24),
+            if (_accelerometerHistory.isNotEmpty)
+              SizedBox(
+                height: 200,
+                child: _buildAccelerometerGraph(),
+              ),
+          ],
+        ),
+      ),
+      bottomNavigationBar: BottomAppBar(
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 16.0),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+            children: [
+              ElevatedButton(
+                onPressed: _resetCalibration,
+                child: const Text('Reset'),
+              ),
+              ElevatedButton(
+                onPressed: _saveCalibration,
+                child: const Text('Save Calibration'),
+              ),
             ],
-          );
-        },
+          ),
+        ),
       ),
     );
+  }
+
+  Widget _buildSensorValue(String label, double value) {
+    return Column(
+      children: [
+        Text(
+          label,
+          style: Theme.of(context).textTheme.titleMedium,
+        ),
+        const SizedBox(height: 4),
+        Text(
+          value.toStringAsFixed(2),
+          style: Theme.of(context).textTheme.bodyLarge,
+        ),
+      ],
+    );
+  }
+
+  Widget _buildAccelerometerGraph() {
+    return CustomPaint(
+      painter: AccelerometerGraphPainter(_accelerometerHistory),
+      size: const Size(double.infinity, 200),
+    );
+  }
+}
+
+class AccelerometerGraphPainter extends CustomPainter {
+  final List<List<double>> accelerometerHistory;
+
+  AccelerometerGraphPainter(this.accelerometerHistory);
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final Paint linePaint = Paint()
+      ..color = Colors.blue
+      ..strokeWidth = 2.0
+      ..style = PaintingStyle.stroke;
+
+    final Paint gridPaint = Paint()
+      ..color = Colors.grey.withOpacity(0.3)
+      ..strokeWidth = 1.0;
+
+    // Draw grid
+    for (int i = 0; i < 5; i++) {
+      double y = size.height / 4 * i;
+      canvas.drawLine(Offset(0, y), Offset(size.width, y), gridPaint);
+    }
+
+    // Draw center line
+    final Paint centerPaint = Paint()
+      ..color = Colors.grey
+      ..strokeWidth = 1.0;
+    canvas.drawLine(
+      Offset(0, size.height / 2),
+      Offset(size.width, size.height / 2),
+      centerPaint,
+    );
+
+    if (accelerometerHistory.isEmpty) return;
+
+    // Find min and max values for scaling
+    double minValue = -10;
+    double maxValue = 10;
+
+    // Create path for Z values
+    final Path zPath = Path();
+
+    // Start path at first point
+    double xStep = size.width / (accelerometerHistory.length - 1);
+    double x = 0;
+    double y = size.height / 2 - (accelerometerHistory[0][2] / (maxValue - minValue)) * size.height / 2;
+    zPath.moveTo(x, y);
+
+    // Add points to path
+    for (int i = 1; i < accelerometerHistory.length; i++) {
+      x = i * xStep;
+      y = size.height / 2 - (accelerometerHistory[i][2] / (maxValue - minValue)) * size.height / 2;
+      zPath.lineTo(x, y);
+    }
+
+    // Draw Z path
+    canvas.drawPath(zPath, linePaint);
+  }
+
+  @override
+  bool shouldRepaint(covariant CustomPainter oldDelegate) {
+    return true;
   }
 }
