@@ -1,11 +1,11 @@
-# 🚧 About the Project
+#  About the Project
 
-## 🌱 Inspiration
+##  Inspiration
 While commuting to my college every day, I constantly encountered numerous potholes along the way. These not only made the journey uncomfortable but also posed safety risks. That experience made me realize how common and overlooked this issue is. I felt a strong need to build something that could contribute to **social good**—a solution where people like me could **crowdsource pothole data** and help improve road conditions collectively.
 
 ---
 
-## 📚 What I Learned
+##  What I Learned
 This project taught me an important lesson:  
 > *Not everything is difficult or impossible—you just need to start.*
 
@@ -24,12 +24,12 @@ I developed this application using:
 - My AI coding partner (**Claude AI**) for guidance and support
 
 ### Key Features:
-- 📱 Supports both **Android and iOS platforms**
-- 📊 Uses **gyroscope and accelerometer data** to detect road anomalies
-- 🌳 Implements a **Decision Tree algorithm** to:
+-  Supports both **Android and iOS platforms**
+-  Uses **gyroscope and accelerometer data** to detect road anomalies
+-  Implements a **Decision Tree algorithm** to:
   - Accurately detect potholes  
   - Differentiate between **speed breakers** and **potholes**
-- 📍 Introduces a **threshold frequency model** to identify potholes:
+-  Introduces a **threshold frequency model** to identify potholes:
   
   $$
   f > f_{\text{threshold}} \Rightarrow \text{Potential pothole detected}
